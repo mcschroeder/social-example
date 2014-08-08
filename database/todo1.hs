@@ -1,13 +1,18 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE GADTs #-}
 
 import Control.Applicative
+import Control.Concurrent
 import Control.Concurrent.STM
+import Control.Exception
 import Control.Monad
 import Control.Monad.Trans.Class
 import Control.Monad.Trans.State.Strict
 import System.Environment
 import System.IO
+import System.IO.Error
 
 ------------------------------------------------------------------------------
 
@@ -42,6 +47,10 @@ instance Database List where
     data Operation List = AddItem Item
                         | UpdateItem Item
                         | DeleteItem ItemId
+                        deriving (Show, Read)
+
+    encode = show
+    decode = read
 
     perform (AddItem i) = addItem i
     perform (UpdateItem i) = updateItem i
@@ -56,7 +65,7 @@ listItems = undefined
 
 ------------------------------------------------------------------------------
 
-newtype Transaction d a = Transaction { unT :: StateT (Env d) STM a }
+newtype Transaction d a = Transaction (StateT (Env d) STM a)
     deriving (Functor, Applicative, Monad)
 
 type Env d = (d, Log d)
@@ -64,6 +73,8 @@ type Log d = [Operation d]
 
 class Database d where
     data Operation d
+    encode :: Operation d -> String
+    decode :: String -> Operation d
     perform :: Operation d -> Transaction d ()
 
 getData :: Transaction d d
@@ -80,29 +91,50 @@ liftSTM m = Transaction $ lift m
 runTransaction :: DatabaseHandle d -> Transaction d a -> IO a
 runTransaction h m = atomicallyWithIO action finalizer
   where
-    action = runStateT (unT m) (base h, [])
-    finalizer (a,(_,log)) = serialize h (reverse log) >> return a
+    action = runT (base h) m
+    finalizer (a,(_,log)) = serialize h log >> return a
+
+runT :: d -> Transaction d a -> STM (a, Env d)
+runT d (Transaction m) = runStateT m (d, [])
 
 ------------------------------------------------------------------------------
 
-data DatabaseHandle d = DatabaseHandle
-    { base :: d
-    , logHandle :: Handle
-    }
+data DatabaseHandle d where
+    DatabaseHandle :: Database d => { base :: d
+                                    , logHandle :: Handle
+                                    , logSem :: MVar ()
+                                    } -> DatabaseHandle d
 
 openDatabase :: Database d => d -> FilePath -> IO (DatabaseHandle d)
-openDatabase = undefined
+openDatabase base fp = do
+    logHandle <- openFile fp ReadWriteMode
+    logSem <- newMVar ()
+    let d = DatabaseHandle{..}
+    deserialize d
+    return d
 
 closeDatabase :: DatabaseHandle d -> IO ()
-closeDatabase = undefined
+closeDatabase DatabaseHandle{..} = hClose logHandle
 
--- note: needs to ensure only 1 thread writes
 serialize :: DatabaseHandle d -> Log d -> IO ()
-serialize = undefined
+serialize DatabaseHandle{..} log =
+    bracket_ (takeMVar logSem)
+             (putMVar logSem ())
+             (mapM_ (hPutStrLn logHandle . encode) (reverse log))
 
 deserialize :: DatabaseHandle d -> IO ()
-deserialize = undefined
+deserialize DatabaseHandle{..} = hMapLines_ logHandle replay
+  where
+    replay = void . atomically . runT base . perform . decode
 
+hMapLines_ :: Handle -> (String -> IO ()) -> IO ()
+hMapLines_ h f = do eof <- hIsEOF h
+                    if eof
+                        then return ()
+                        else hGetLine h >>= f
+
+
+{-# WARNING atomicallyWithIO "unsupported; using unsafe simulation" #-}
 atomicallyWithIO :: STM a -> (a -> IO b) -> IO b
-atomicallyWithIO = undefined
+atomicallyWithIO stm io = atomically stm >>= io
 
