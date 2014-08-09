@@ -131,7 +131,7 @@ hMapLines_ :: Handle -> (String -> IO ()) -> IO ()
 hMapLines_ h f = do eof <- hIsEOF h
                     if eof
                         then return ()
-                        else hGetLine h >>= f
+                        else hGetLine h >>= f >> hMapLines_ h f
 
 
 {-# WARNING atomicallyWithIO "unsupported; using unsafe simulation" #-}
