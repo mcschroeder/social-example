@@ -24,44 +24,75 @@ main = do
     db <- openDatabase empty fp
 
     case cmd of
-        "add"    -> runTransaction db $ newItem (args !! 0)
-        "remove" -> runTransaction db $ deleteItem (args !! 0)
-        "list"   -> do items <- runTransaction db listItems
-                       mapM_ putStrLn items
+        "add" -> do let str = args !! 0
+                    runTransaction db $ addItem str
+
+        "update" -> do let i = read $ args !! 0
+                           str = args !! 1
+                       runTransaction db $ updateItem i str
+
+        "delete" -> do let i = read $ args !! 0
+                       runTransaction db $ deleteItem i
+
+        "list" -> do items <- runTransaction db listItems
+                     mapM_ putStrLn items
 
     closeDatabase db
 
 ------------------------------------------------------------------------------
 
-data Item = Item
-    { itemId :: ItemId
-    , itemText :: String
-    , itemDone :: Bool
-    } deriving (Show,Read)
-
-type ItemId = Int
-
+type Item = String
 newtype List = List (TVar [TVar Item])
 
 instance Database List where
     data Operation List = AddItem Item
-                        | UpdateItem Item
-                        | DeleteItem ItemId
+                        | UpdateItem Int Item
+                        | DeleteItem Int
                         deriving (Show, Read)
 
     encode = show
     decode = read
 
-    perform (AddItem i) = addItem i
-    perform (UpdateItem i) = updateItem i
+    perform (AddItem str) = addItem str
+    perform (UpdateItem i str) = updateItem i str
     perform (DeleteItem i) = deleteItem i
 
-addItem = undefined
-updateItem = undefined
-deleteItem = undefined
-getItem = undefined
-newItem = undefined
-listItems = undefined
+
+addItem :: Item -> Transaction List ()
+addItem item = do
+    record (AddItem item)
+    List listVar <- getData
+    liftSTM $ do
+        itemVar <- newTVar item
+        itemsVar <- readTVar listVar
+        writeTVar listVar (itemVar:itemsVar)
+
+updateItem :: Int -> Item -> Transaction List ()
+updateItem i str = do
+    record (UpdateItem i str)
+    List listVar <- getData
+    liftSTM $ do
+        itemsVar <- readTVar listVar
+        let itemVar = itemsVar !! i
+        writeTVar itemVar str
+
+deleteItem :: Int -> Transaction List ()
+deleteItem i = do
+    record (DeleteItem i)
+    List listVar <- getData
+    liftSTM $ do
+        items <- readTVar listVar
+        when (i >= length items) (error "index out of bounds")
+        let (xs,ys) = splitAt i items
+            items' = xs ++ (tail ys)
+        writeTVar listVar items'
+
+listItems :: Transaction List [Item]
+listItems = do
+    List listVar <- getData
+    liftSTM $ do
+        itemVars <- readTVar listVar
+        mapM readTVar itemVars
 
 ------------------------------------------------------------------------------
 

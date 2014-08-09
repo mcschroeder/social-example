@@ -1,4 +1,0 @@
-AddItem (Item {itemText = "hey", itemDone = False})
-AddItem (Item {itemText = "43434", itemDone = False})
-AddItem (Item {itemText = "XXX", itemDone = False})
-AddItem (Item {itemText = "what", itemDone = False})
