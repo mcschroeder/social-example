@@ -1,3 +1,5 @@
+{-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -6,6 +8,7 @@
 import Control.Applicative
 import Control.Concurrent.STM
 import Control.Monad
+import Data.List
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Set (Set)
@@ -17,57 +20,69 @@ import Data.Word
 ------------------------------------------------------------------------------
 
 data SocialDB = SocialDB
-    { users :: TVar (Map UserId (TVar User)) }
+    { users :: TVar (Map UserId UserVar) }
 
 data User = User
     { userId :: UserId
     , name :: Text
-    , friends :: TVar (Set UserId)
-    , posts :: TVar (Map PostId (TVar Post))
+    , friends :: TVar [UserVar]
+    , posts :: TVar (Map PostId PostVar)
     , activityLog :: TVar [(Activity, UTCTime)]
     }
 
-data Activity = Posted PostId
-              | Liked UserId PostId
-              | Friended UserId
+data Activity = Posted PostVar
+              | Liked PostVar
+              | Friended UserVar
 
 data Post = Post
     { postId :: PostId  -- only unique per author
-    , author :: UserId
+    , author :: UserVar
     , creationTime :: UTCTime
     , body :: Text
-    , likedBy :: TVar (Set UserId)
+    , likedBy :: TVar [UserVar]
     }
 
-newtype UserId = UserId Word64 deriving (Show, Eq, Ord)
-newtype PostId = PostId Word64 deriving (Show, Eq, Ord)
+newtype UserId = UserId Word64 deriving (Eq, Ord, Show, Read)
+newtype PostId = PostId Word64 deriving (Eq, Ord, Show, Read)
+
+type UserVar = TVar User
+type PostVar = TVar Post
 
 ------------------------------------------------------------------------------
 
 instance Durable SocialDB where
-    data Operation SocialDB = AddUser User
-                            | AddPost Post
+    data Operation SocialDB = AddUser UserId Text
+                            | AddPost PostId UserId UTCTime Text
                             | Like UserId UserId PostId
                             | Unlike UserId UserId PostId
                             | Friend UserId UserId
                             | Unfriend UserId UserId
+                            deriving (Show, Read)
 
-    replay (AddUser user) = void $ addUser user
-    replay (AddPost post) = void $ addPost post
+
+    replay (AddUser userId name) =
+        void $ addUser userId name
+
+    replay (AddPost postId author creationTime body) =
+        void $ addPost postId author creationTime body
+
     replay (Like uid1 uid2 pid) = do
         user <- getUser uid1
         author <- getUser uid2
         post <- getPost author pid
         like user post
+
     replay (Unlike uid1 uid2 pid) = do
         user <- getUser uid1
         author <- getUser uid2
         post <- getPost author pid
         unlike user post
+
     replay (Friend uid1 uid2) = do
         u1 <- getUser uid1
         u2 <- getUser uid2
         friend u1 u2
+
     replay (Unfriend uid1 uid2) = do
         u1 <- getUser uid1
         u2 <- getUser uid2
@@ -76,7 +91,7 @@ instance Durable SocialDB where
 randomId :: TX SocialDB Word64
 randomId = undefined
 
-getUser :: UserId -> TX SocialDB (TVar User)
+getUser :: UserId -> TX SocialDB UserVar
 getUser uid = do
     db <- getDatabase
     usermap <- liftSTM $ readTVar (users db)
@@ -84,32 +99,31 @@ getUser uid = do
         Just uvar -> return uvar
         Nothing -> error $ "user not found: " ++ (show uid)  -- TODO
 
-newUser :: Text -> TX SocialDB (TVar User)
+newUser :: Text -> TX SocialDB UserVar
 newUser name = do
     userId <- UserId <$> randomId
     db <- getDatabase
     liftSTM $ do
         usermap <- readTVar (users db)
         check (Map.notMember userId usermap)
-    user <- liftSTM $ do
-        friends <- newTVar Set.empty
-        posts <- newTVar Map.empty
-        activityLog <- newTVar []
-        return $ User { .. }
-    addUser user
+    addUser userId name
 
-addUser :: User -> TX SocialDB (TVar User)
-addUser user@User{..} = do
+addUser :: UserId -> Text -> TX SocialDB UserVar
+addUser userId name = do
     db <- getDatabase
     usermap <- liftSTM $ readTVar (users db)
     unless (Map.notMember userId usermap)
            (error $ "user already exists: " ++ show userId)  -- TODO
-    uvar <- liftSTM $ newTVar user
+    uvar <- liftSTM $ do
+        friends <- newTVar []
+        posts <- newTVar Map.empty
+        activityLog <- newTVar []
+        newTVar User{..}
     liftSTM $ modifyTVar' (users db) (Map.insert userId uvar)
-    record $ AddUser user
+    record $ AddUser userId name
     return uvar
 
-getPost :: TVar User -> PostId -> TX SocialDB (TVar Post)
+getPost :: UserVar -> PostId -> TX SocialDB PostVar
 getPost uvar pid = do
     u <- liftSTM $ readTVar uvar
     postmap <- liftSTM $ readTVar (posts u)
@@ -117,67 +131,70 @@ getPost uvar pid = do
         Just pvar -> return pvar
         Nothing -> error $ "post not found: " ++ (show pid)  -- TODO
 
-newPost :: TVar User -> Text -> TX SocialDB (TVar Post)
-newPost uvar body = do
-    u <- liftSTM $ readTVar uvar
-    let author = userId u
+newPost :: UserVar -> Text -> TX SocialDB PostVar
+newPost author body = do
     postId <- PostId <$> randomId
+    user <- liftSTM $ readTVar author
     liftSTM $ do
-        postmap <- readTVar (posts u)
+        postmap <- readTVar (posts user)
         check (Map.notMember postId postmap)
     creationTime <- getTime
-    likedBy <- liftSTM $ newTVar Set.empty
-    addPost Post{..}
+    addPost postId (userId user) creationTime body
 
-addPost :: Post -> TX SocialDB (TVar Post)
-addPost post@Post{..} = do
-    uvar <- getUser author
-    u <- liftSTM $ readTVar uvar
-    postmap <- liftSTM $ readTVar (posts u)
+addPost :: PostId -> UserId -> UTCTime -> Text -> TX SocialDB PostVar
+addPost postId authorId creationTime body = do
+    author <- getUser authorId
+    postmap <- liftSTM $ readTVar <$> posts =<< readTVar author
     unless (Map.notMember postId postmap)
            (error $ "post already exists: " ++ show postId)  -- TODO
-    pvar <- liftSTM $ newTVar post
-    liftSTM $ modifyTVar' (posts u) (Map.insert postId pvar)
-    record $ AddPost post
+    pvar <- liftSTM $ do
+        likedBy <- newTVar []
+        newTVar Post{..}
+    liftSTM $ do
+        postmapVar <- posts <$> readTVar author
+        modifyTVar' postmapVar (Map.insert postId pvar)
+    record $ AddPost postId authorId creationTime body
     return pvar
 
-like :: TVar User -> TVar Post -> TX SocialDB ()
+like :: UserVar -> PostVar -> TX SocialDB ()
 like uvar pvar = do
     now <- getTime
-    User{..} <- liftSTM $ readTVar uvar
-    Post{..} <- liftSTM $ readTVar pvar
+    user <- liftSTM $ readTVar uvar
+    post <- liftSTM $ readTVar pvar
+    authorId <- liftSTM $ userId <$> readTVar (author post)
     liftSTM $ do
-        modifyTVar' likedBy (Set.insert userId)
-        modifyTVar' activityLog ((Liked author postId, now):)
-    record $ Like userId author postId
+        modifyTVar' (likedBy post) (uvar:)
+        modifyTVar' (activityLog user) ((Liked pvar, now):)
+    record $ Like (userId user) authorId (postId post)
 
-unlike :: TVar User -> TVar Post -> TX SocialDB ()
+unlike :: UserVar -> PostVar -> TX SocialDB ()
 unlike uvar pvar = do
-    User{..} <- liftSTM $ readTVar uvar
-    Post{..} <- liftSTM $ readTVar pvar
-    liftSTM $ modifyTVar' likedBy (Set.delete userId)
-    record $ Unlike userId author postId
+    user <- liftSTM $ readTVar uvar
+    post <- liftSTM $ readTVar pvar
+    authorId <- liftSTM $ userId <$> readTVar (author post)
+    liftSTM $ modifyTVar' (likedBy post) (delete uvar)
+    record $ Unlike (userId user) authorId (postId post)
 
-friend :: TVar User -> TVar User -> TX SocialDB ()
+friend :: UserVar -> UserVar -> TX SocialDB ()
 friend v1 v2 = do
     now <- getTime
     u1 <- liftSTM $ readTVar v1
     u2 <- liftSTM $ readTVar v2
     liftSTM $ do
-        modifyTVar' (friends u1) (Set.insert (userId u2))
-        modifyTVar' (friends u2) (Set.insert (userId u1))
-        modifyTVar' (activityLog u1) ((Friended (userId u2), now):)
-        modifyTVar' (activityLog u2) ((Friended (userId u1), now):)
+        modifyTVar' (friends u1) (v2:)
+        modifyTVar' (friends u2) (v1:)
+        modifyTVar' (activityLog u1) ((Friended v2, now):)
+        modifyTVar' (activityLog u2) ((Friended v1, now):)
     record $ Friend (userId u1) (userId u2)
 
 
-unfriend :: TVar User -> TVar User -> TX SocialDB ()
+unfriend :: UserVar -> UserVar -> TX SocialDB ()
 unfriend v1 v2 = do
     u1 <- liftSTM $ readTVar v1
     u2 <- liftSTM $ readTVar v2
     liftSTM $ do
-        modifyTVar' (friends u1) (Set.delete (userId u2))
-        modifyTVar' (friends u2) (Set.delete (userId u1))
+        modifyTVar' (friends u1) (delete v2)
+        modifyTVar' (friends u2) (delete v1)
     record $ Unfriend (userId u1) (userId u2)
 
 ------------------------------------------------------------------------------
@@ -185,7 +202,9 @@ unfriend v1 v2 = do
 newtype TX d a = TX (STM a)
   deriving (Functor, Applicative, Monad)
 
-class Durable d where
+type Serializable a = (Show a, Read a)
+
+class Serializable (Operation d) => Durable d where
     data Operation d
     replay :: Operation d -> TX d ()
 
