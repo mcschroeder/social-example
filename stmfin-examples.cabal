@@ -23,3 +23,16 @@ executable todo1
   -- hs-source-dirs:
   ghc-options:         -threaded
   default-language:    Haskell2010
+
+
+executable bank-containers
+    main-is: bank-containers.hs
+    build-depends: base ==4.7.*, async, containers, random, stm, criterion
+    ghc-options: -threaded
+    default-language: Haskell2010
+
+executable bank-ctrie
+    main-is: bank-ctrie.hs
+    build-depends: base ==4.7.*, async, ctrie, random, stm, criterion
+    ghc-options: -threaded
+    default-language: Haskell2010

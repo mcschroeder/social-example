@@ -1,13 +1,17 @@
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TypeFamilies #-}
 
 import Control.Applicative
+import Control.Arrow
 import Control.Concurrent.STM
 import Control.Monad
+import Control.Monad.Trans.Class
+import Control.Monad.Trans.State.Strict
 import Data.Function
 import Data.List
 import Data.Map.Strict (Map)
@@ -16,9 +20,11 @@ import Data.Monoid
 import Data.Ord
 import Data.Set (Set)
 import qualified Data.Set as Set
-import Data.Text
+import Data.Text (Text)
 import Data.Time
 import Data.Word
+import GHC.Conc.Sync (unsafeIOToSTM)
+import System.Random
 
 ------------------------------------------------------------------------------
 
@@ -28,22 +34,21 @@ data SocialDB = SocialDB
 newtype UserId = UserId Word64 deriving (Eq, Ord, Show, Read)
 
 data User = User
-    { userId :: UserId
-    , name :: TVar Text
-    , friends :: TVar (Set User)
-    , posts :: TVar (Map UTCTime Post)
-    , activityLog :: TVar [(Activity, UTCTime)]
+    { userId     :: UserId
+    , name       :: TVar Text
+    , friends    :: TVar (Set User)
+    , posts      :: TVar (Map UTCTime Post)
+    , activities :: TVar [(Activity, UTCTime)]
     }
 
-data Activity = Posted Post
-              | Liked Post
+data Activity = Liked Post
               | Friended User
 
 data Post = Post
-    { author :: User
+    { author       :: User
     , creationTime :: UTCTime
-    , body :: TVar Text
-    , likedBy :: TVar (Set User)
+    , body         :: TVar Text
+    , likedBy      :: TVar (Set User)
     }
 
 instance Eq User where
@@ -68,7 +73,6 @@ instance Durable SocialDB where
                             | Friend UserId UserId
                             | Unfriend UserId UserId
                             deriving (Show, Read)
-
 
     replay (AddUser userId name) =
         void $ addUser userId name
@@ -98,9 +102,6 @@ instance Durable SocialDB where
         u2 <- getUser uid2
         unfriend u1 u2
 
-randomId :: TX SocialDB Word64
-randomId = undefined
-
 getUser :: UserId -> TX SocialDB User
 getUser uid = do
     db <- getDatabase
@@ -111,7 +112,7 @@ getUser uid = do
 
 newUser :: Text -> TX SocialDB User
 newUser name = do
-    userId <- UserId <$> randomId
+    userId <- UserId <$> unsafeIOToTX randomIO
     db <- getDatabase
     liftSTM $ do
         usermap <- readTVar (users db)
@@ -128,7 +129,7 @@ addUser userId name = do
         name <- newTVar name
         friends <- newTVar Set.empty
         posts <- newTVar Map.empty
-        activityLog <- newTVar []
+        activities <- newTVar []
         return User{..}
     liftSTM $ modifyTVar' (users db) (Map.insert userId user)
     record $ AddUser userId name
@@ -168,7 +169,7 @@ like user post = do
     now <- getTime
     liftSTM $ do
         modifyTVar' (likedBy post) (Set.insert user)
-        modifyTVar' (activityLog user) ((Liked post, now):)
+        modifyTVar' (activities user) ((Liked post, now):)
     record $ Like (userId user) (userId . author $ post) (creationTime post)
 
 unlike :: User -> Post -> TX SocialDB ()
@@ -182,10 +183,9 @@ friend user1 user2 = do
     liftSTM $ do
         modifyTVar' (friends user1) (Set.insert user2)
         modifyTVar' (friends user2) (Set.insert user1)
-        modifyTVar' (activityLog user1) ((Friended user2, now):)
-        modifyTVar' (activityLog user2) ((Friended user1, now):)
+        modifyTVar' (activities user1) ((Friended user2, now):)
+        modifyTVar' (activities user2) ((Friended user1, now):)
     record $ Friend (userId user1) (userId user2)
-
 
 unfriend :: User -> User -> TX SocialDB ()
 unfriend user1 user2 = do
@@ -196,7 +196,35 @@ unfriend user1 user2 = do
 
 ------------------------------------------------------------------------------
 
-newtype TX d a = TX (STM a)
+-- test = do
+--     adam <- newUser "adam"
+--     post <- adam `posts` "Hello world!"
+--     eve <- newUser "eve"
+--     eve `likes` post
+--     adam `befriends` eve
+
+-- test2 = do
+--     adam <- findUserByName "adam"
+--     eve <- findUserByName "eve"
+--     adam `requestsFriendshipOf` eve
+
+
+--     (req:_) <- waitForFriendshipRequests eve
+--     if from req == adam
+--         then denyRequest req
+--         else if from req == snake
+--             then acceptRequest req
+--             else return ()
+
+
+-- idea: friendship bot: waits for likes of a user's posts
+--                       suggests friendships
+
+
+
+------------------------------------------------------------------------------
+
+newtype TX d a = TX (StateT (d, [Operation d]) STM a)
   deriving (Functor, Applicative, Monad)
 
 type Serializable a = (Show a, Read a)
@@ -206,15 +234,33 @@ class Serializable (Operation d) => Durable d where
     replay :: Operation d -> TX d ()
 
 record :: Durable d => Operation d -> TX d ()
-record = undefined
+record op = TX $ modify' (second (op:))
 
 liftSTM :: STM a -> TX d a
-liftSTM = undefined
+liftSTM = TX . lift
 
 getTime :: TX d UTCTime
-getTime = undefined
+getTime = unsafeIOToTX getCurrentTime
 
 getDatabase :: TX d d
-getDatabase = undefined
+getDatabase = TX $ fst <$> get
 
+unsafeIOToTX :: IO a -> TX d a
+unsafeIOToTX = liftSTM . unsafeIOToSTM
 
+data Database d where
+    Database :: Durable d => { base :: d
+                             } -> Database d
+
+runTX :: Database d -> TX d a -> IO a
+runTX h (TX m) = atomicallyWithIO action finalizer
+  where
+    action = runStateT m (base h, [])
+    finalizer (a,(_,log)) = serialize h log >> return a
+
+serialize :: Database d -> [Operation d] -> IO ()
+serialize = undefined
+
+{-# WARNING atomicallyWithIO "unsupported; using unsafe simulation" #-}
+atomicallyWithIO :: STM a -> (a -> IO b) -> IO b
+atomicallyWithIO stm io = atomically stm >>= io
