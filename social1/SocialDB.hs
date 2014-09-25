@@ -3,7 +3,8 @@
 {-# LANGUAGE TypeFamilies #-}
 
 module SocialDB
-    ( SocialDB, User(..), Post(..)
+    ( SocialDB(..), User(..), Post(..)
+    , emptySocialDB
     , newUser, newPost
     , getUser, getPost
     , like, becomeFriends
@@ -63,6 +64,11 @@ instance Ord Post where
 
 ------------------------------------------------------------------------------
 
+emptySocialDB :: IO (SocialDB)
+emptySocialDB = do
+    users <- newTVarIO Map.empty
+    return SocialDB{..}
+
 instance Durable SocialDB where
     data Operation SocialDB = NewUser Text
                             | AddPost Text UTCTime Text
@@ -96,7 +102,7 @@ instance Exception SocialException
 
 newUser :: Text -> TX SocialDB User
 newUser name = do
-    db <- getDatabase
+    db <- getData
     usermap <- liftSTM $ readTVar (users db)
     when (Map.member name usermap) (throwTX $ UserAlreadyExists name)
     friends <- liftSTM $ newTVar Set.empty
@@ -121,7 +127,7 @@ addPost author time body = do
 
 getUser :: Text -> TX SocialDB User
 getUser name = do
-    db <- getDatabase
+    db <- getData
     usermap <- liftSTM $ readTVar (users db)
     case Map.lookup name usermap of
         Just user -> return user
