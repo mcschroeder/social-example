@@ -7,7 +7,7 @@ module SocialDB
     , emptySocialDB
     , newUser, newPost
     , getUser, getPost
-    , like, becomeFriends
+    , like, unlike, becomeFriends
     ) where
 
 import Control.Concurrent.STM
@@ -73,6 +73,7 @@ instance Durable SocialDB where
     data Operation SocialDB = NewUser Text
                             | AddPost Text UTCTime Text
                             | Like Text Text UTCTime
+                            | Unlike Text Text UTCTime
                             | BecomeFriends Text Text
                             deriving (Show, Read)
 
@@ -88,6 +89,11 @@ instance Durable SocialDB where
                                         author <- getUser name2
                                         post <- getPost author time
                                         like user post
+
+    replay (Unlike name1 name2 time) = do user <- getUser name1
+                                          author <- getUser name2
+                                          post <- getPost author time
+                                          unlike user post
 
     replay (BecomeFriends name1 name2) = do user1 <- getUser name1
                                             user2 <- getUser name2
@@ -144,6 +150,11 @@ like :: User -> Post -> TX SocialDB ()
 like user post = do
     liftSTM $ modifyTVar (likedBy post) (Set.insert user)
     record $ Like (name user) (name $ author post) (time post)
+
+unlike :: User -> Post -> TX SocialDB ()
+unlike user post = do
+    liftSTM $ modifyTVar (likedBy post) (Set.delete user)
+    record $ Unlike (name user) (name $ author post) (time post)
 
 becomeFriends :: User -> User -> TX SocialDB ()
 becomeFriends user1 user2 = do

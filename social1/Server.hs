@@ -1,6 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
-{-# LANGUAGE RecordWildCards #-}
 
 module Server where
 
@@ -55,11 +54,39 @@ main = do
                 newPost user body
             redirect $ "/" <> (L.fromStrict name)
 
+        get "/:author/:time/like" $ do
+            author <- param "author"
+            time <- param "time"
+            user <- param "user"
+            liftIO $ runTX db $ do
+                user <- getUser user
+                author <- getUser author
+                post <- getPost author time
+                user `like` post
+            redirect $ "/" <> (L.fromStrict author)
+
+        get "/:author/:time/unlike" $ do
+            author <- param "author"
+            time <- param "time"
+            user <- param "user"
+            liftIO $ runTX db $ do
+                user <- getUser user
+                author <- getUser author
+                post <- getPost author time
+                user `unlike` post
+            redirect $ "/" <> (L.fromStrict author)
+
+
+instance Parsable UTCTime where
+    parseParam = readEither
+
 renderProfile :: User -> TX SocialDB Html
 renderProfile user = do
+    let viewer = user -- TODO
     friends <- liftSTM $ Set.toList <$> readTVar (friends user)
-    feed <- mapM renderPost =<< getFeed user
+    feed <- mapM (renderPost viewer) =<< getFeed user
     return [shamlet|
+        <a href="/">Funcbook
         <h1>#{name user}
         <h2>Friends
         #{userList friends}
@@ -82,19 +109,34 @@ compactUserList :: [User] -> Html
 compactUserList = mconcat . intersperse ", " . map linkify
 
 linkify :: User -> Html
-linkify user = [shamlet| <li><a href=/#{name user}>#{name user} |]
+linkify user = [shamlet| <a href=/#{name user}>#{name user} |]
 
-renderPost :: Post -> TX SocialDB Html
-renderPost Post{..} = do
-    likes <- liftSTM $ Set.toList <$> readTVar likedBy
+renderPost :: User -> Post -> TX SocialDB Html
+renderPost viewer post = do
+    likes <- liftSTM $ Set.toList <$> readTVar (likedBy post)
+    let doesLike = viewer `elem` likes
+    let likes' = Data.List.delete viewer likes
     return [shamlet|
         <div>
-            <b>#{name author}
-            <i>#{show time}
-            <p>#{body}
-            Liked by #{compactUserList likes}
+            <b>#{name $ author post}
+            <i>#{show $ time post}
+            <p>#{SocialDB.body post}
+            $if doesLike
+                <a href=#{postURL post}/unlike?user=#{name viewer}>Unlike
+            $else
+                <a href=#{postURL post}/like?user=#{name viewer}>Like
+            <br>
+            $if not $ null likes
+                Liked by #
+                $if doesLike
+                    you #
+                    $if not $ null likes'
+                        and #
+                #{compactUserList $ likes'}
     |]
 
+postURL :: Post -> T.Text
+postURL post = mconcat ["/", name $ author post, "/", T.pack $ show $ time post]
 
 getAllUsers :: TX SocialDB [User]
 getAllUsers = do
