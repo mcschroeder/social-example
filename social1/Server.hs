@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE RecordWildCards #-}
 
 module Server where
@@ -14,6 +15,8 @@ import qualified Data.Set as Set
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as L
 import Data.Time
+import Text.Blaze.Html.Renderer.Text
+import Text.Hamlet
 import Web.Scotty
 
 import SocialDB
@@ -26,66 +29,71 @@ main = do
     scotty 3000 $ do
         get "/" $ do
             users <- liftIO $ runTX db getAllUsers
-            html $ "<h1>Welcome to Funcbook!</h1>"
-                   <> renderUserList users
+            html $ renderHtml [shamlet|
+                <h1>Welcome to Funcbook
+                Register new user: <form action="/register">
+                    <input type=text name=name>
+                    <input type=submit>
+                #{userList users}
+            |]
 
-        get "/register/:name" $ do
+        get "/register" $ do
             name <- param "name"
-            user <- liftIO $ runTX db $ newUser $ L.toStrict name
-            redirect $ "/" <> name
+            user <- liftIO $ runTX db $ newUser name
+            redirect $ "/" <> (L.fromStrict name)
 
         get "/:name" $ do
             name <- param "name"
-            page <- liftIO $ runTX db $ do
-                user <- getUser $ L.toStrict name
-                renderPage user
-            html page
+            profile <- liftIO $ runTX db $ renderProfile =<< getUser name
+            html $ renderHtml profile
 
+        get "/:name/post" $ do
+            name <- param "name"
+            body <- param "body"
+            liftIO $ runTX db $ do
+                user <- getUser name
+                newPost user body
+            redirect $ "/" <> (L.fromStrict name)
 
-renderPage :: User -> TX SocialDB L.Text
-renderPage user = do
+renderProfile :: User -> TX SocialDB Html
+renderProfile user = do
     friends <- liftSTM $ Set.toList <$> readTVar (friends user)
-    feed <- renderFeed =<< getFeed user
-    return $ mconcat
-        [ "<html>"
-        , "<head><title>", L.fromStrict $ name user, "</title></head>"
-        , "<body><h1>", L.fromStrict $ name user, "</h1>"
-        , "<h3>Friends</h3>", renderUserList friends
-        , "<h3>Feed</h3>", feed
-        , "</html>"
-        ]
+    feed <- mapM renderPost =<< getFeed user
+    return [shamlet|
+        <h1>#{name user}
+        <h2>Friends
+        #{userList friends}
+        <h2>Feed
+        <form action="/#{name user}/post">
+            <textarea name=body>
+            <input type=submit>
+        #{feed}
+    |]
 
-renderUserList :: [User] -> L.Text
-renderUserList users =
-    mconcat ["<ul>", L.concat (map listify users), "</ul>"]
-  where
-    listify u = mconcat ["<li>", linkify u, "</li>"]
+userList :: [User] -> Html
+userList users =
+    [shamlet|
+        <ul>
+            $forall user <- users
+                <li>#{linkify user}
+    |]
 
-renderCompactUserList :: [User] -> L.Text
-renderCompactUserList = L.intercalate ", " . map linkify
+compactUserList :: [User] -> Html
+compactUserList = mconcat . intersperse ", " . map linkify
 
-linkify :: User -> L.Text
-linkify u = mconcat ["<a href='/", n, "'>", n, "</a>"]
-  where n = L.fromStrict $ name u
+linkify :: User -> Html
+linkify user = [shamlet| <li><a href=/#{name user}>#{name user} |]
 
-
-renderFeed :: [Post] -> TX SocialDB L.Text
-renderFeed posts = L.concat <$> mapM renderPost posts
-
-renderPost :: Post -> TX SocialDB L.Text
+renderPost :: Post -> TX SocialDB Html
 renderPost Post{..} = do
     likes <- liftSTM $ Set.toList <$> readTVar likedBy
-    return $ mconcat
-        [ "<div class='post'>"
-        , "<b>", L.fromStrict $ name author, "</b>", "<br>"
-        , "<i>", renderTime time, "</i>", "<br>"
-        , "<p>", L.fromStrict body, "</p>"
-        , "Liked by ", renderCompactUserList likes
-        , "</div>"
-        ]
-
-renderTime :: UTCTime -> L.Text
-renderTime time = L.pack (show time)
+    return [shamlet|
+        <div>
+            <b>#{name author}
+            <i>#{show time}
+            <p>#{body}
+            Liked by #{compactUserList likes}
+    |]
 
 
 getAllUsers :: TX SocialDB [User]
@@ -98,7 +106,7 @@ getFeed user = do
     myPosts <- getAllPosts user
     friends <- liftSTM $ Set.toList <$> readTVar (friends user)
     friendPosts <- concat <$> mapM getAllPosts friends
-    return $ sortBy (comparing time) (myPosts ++ friendPosts)
+    return $ sortBy (flip $ comparing time) (myPosts ++ friendPosts)
 
 getAllPosts :: User -> TX SocialDB [Post]
 getAllPosts user =
