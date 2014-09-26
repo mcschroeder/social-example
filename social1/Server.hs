@@ -5,10 +5,12 @@ module Server where
 
 import Control.Applicative
 import Control.Concurrent.STM
+import Control.Monad
 import Control.Monad.IO.Class
 import Data.List
 import Data.Monoid
 import qualified Data.Map as Map
+import Data.Maybe
 import Data.Ord
 import qualified Data.Set as Set
 import qualified Data.Text as T
@@ -17,9 +19,25 @@ import Data.Time
 import Text.Blaze.Html.Renderer.Text
 import Text.Hamlet
 import Web.Scotty
+import Web.Scotty.Cookie
 
 import SocialDB
 import TX
+
+blaze :: Html -> ActionM ()
+blaze = html . renderHtml
+
+userUrl :: User -> L.Text
+userUrl user = "/" <> (L.fromStrict $ name user)
+
+getLoggedInUser :: Database SocialDB -> ActionM (Maybe User)
+getLoggedInUser db = do
+    name <- getCookie "name"
+    case name of
+        Just name -> do
+            user <- liftIO $ runTX db $ getUser name
+            return $ Just user
+        Nothing -> return Nothing
 
 main :: IO ()
 main = do
@@ -27,24 +45,54 @@ main = do
 
     scotty 3000 $ do
         get "/" $ do
+            maybeViewer <- getLoggedInUser db
             users <- liftIO $ runTX db getAllUsers
-            html $ renderHtml [shamlet|
-                <h1>Welcome to Funcbook
-                Register new user: <form action="/register">
-                    <input type=text name=name>
-                    <input type=submit>
+            blaze [shamlet|
+                <h1>The Funcbook
+                $maybe viewer <- maybeViewer
+                    Logged in as #{name viewer}.
+                    <form action=/logout method=post>
+                        <input type=submit value=Logout>
+                $nothing
+                    <form action=/login method=post>
+                        <input type=text name=name>
+                        <input type=submit value=Login>
+                <a href=/register>Register
+                <h2>Users
                 #{userList users}
             |]
 
+        post "/login" $ do
+            name <- param "name"
+            user <- liftIO $ runTX db $ getUser name
+            setSimpleCookie "name" name
+            jumpbackURL <- param "jumpback" `rescue` (const $ return $ userUrl user)
+            redirect jumpbackURL
+
+        post "/logout" $ do
+            deleteCookie "name"
+            jumpbackURL <- param "jumpback" `rescue` (const $ return "/")
+            redirect jumpbackURL
+
         get "/register" $ do
+            blaze [shamlet|
+                <form action=/register method=post>
+                    <input type=text name=name>
+                    <input type=submit value="Register new user">
+            |]
+
+        post "/register" $ do
             name <- param "name"
             user <- liftIO $ runTX db $ newUser name
-            redirect $ "/" <> (L.fromStrict name)
+            redirect $ userUrl user
 
         get "/:name" $ do
             name <- param "name"
-            profile <- liftIO $ runTX db $ renderProfile =<< getUser name
-            html $ renderHtml profile
+            maybeViewer <- getLoggedInUser db
+            profile <- liftIO $ runTX db $ do
+                user <- getUser name
+                renderProfile maybeViewer user
+            blaze profile
 
         get "/:name/post" $ do
             name <- param "name"
@@ -80,20 +128,39 @@ main = do
 instance Parsable UTCTime where
     parseParam = readEither
 
-renderProfile :: User -> TX SocialDB Html
-renderProfile user = do
-    let viewer = user -- TODO
+banner :: Maybe L.Text -> Maybe User -> Html
+banner maybeJumpbackUrl maybeViewer =
+    [shamlet|
+    <a href="/">Funcbook
+    $maybe viewer <- maybeViewer
+        Logged in as <a href=#{userUrl viewer}>#{name viewer}</a>.
+        <form action=/logout method=post>
+            $maybe jumpbackUrl <- maybeJumpbackUrl
+                <input type=hidden name=jumpback value=#{jumpbackUrl}>
+            <input type=submit value=Logout>
+    $nothing
+        <form action=/login method=post>
+            $maybe jumpbackUrl <- maybeJumpbackUrl
+                <input type=hidden name=jumpback value=#{jumpbackUrl}>
+            <input type=text name=name>
+            <input type=submit value=Login>
+        <a href=/register>Register
+    |]
+
+renderProfile :: Maybe User -> User -> TX SocialDB Html
+renderProfile maybeViewer user = do
     friends <- liftSTM $ Set.toList <$> readTVar (friends user)
-    feed <- mapM (renderPost viewer) =<< getFeed user
-    return [shamlet|
-        <a href="/">Funcbook
+    feed <- mapM (renderPost maybeViewer) =<< getFeed user
+    return $ banner (Just $ userUrl user) maybeViewer <> [shamlet|
         <h1>#{name user}
         <h2>Friends
         #{userList friends}
         <h2>Feed
-        <form action="/#{name user}/post">
-            <textarea name=body>
-            <input type=submit>
+        $maybe viewer <- maybeViewer
+            $if viewer == user
+                <form action="/#{name user}/post">
+                    <textarea name=body>
+                    <input type=submit>
         #{feed}
     |]
 
@@ -111,32 +178,43 @@ compactUserList = mconcat . intersperse ", " . map linkify
 linkify :: User -> Html
 linkify user = [shamlet| <a href=/#{name user}>#{name user} |]
 
-renderPost :: User -> Post -> TX SocialDB Html
-renderPost viewer post = do
+renderPost :: Maybe User -> Post -> TX SocialDB Html
+renderPost maybeViewer post = do
     likes <- liftSTM $ Set.toList <$> readTVar (likedBy post)
-    let doesLike = viewer `elem` likes
-    let likes' = Data.List.delete viewer likes
-    return [shamlet|
+    case maybeViewer of
+        Just viewer -> do
+            let doesLike = viewer `elem` likes
+            let likes' = Data.List.delete viewer likes
+            return $ content <> likeButton doesLike viewer
+                             <> likeList doesLike likes'
+        Nothing -> return $ content <> likeList False likes
+  where
+    content = [shamlet|
         <div>
             <b>#{name $ author post}
             <i>#{show $ time post}
             <p>#{SocialDB.body post}
+    |]
+    likeButton doesLike viewer = [shamlet|
+        $if doesLike
+            <a href=#{postUrl post}/unlike?user=#{name viewer}>Unlike
+        $else
+            <a href=#{postUrl post}/like?user=#{name viewer}>Like
+        <br>
+    |]
+    likeList doesLike likes = [shamlet|
+        $if doesLike || not (null likes)
+            Liked by #
             $if doesLike
-                <a href=#{postURL post}/unlike?user=#{name viewer}>Unlike
-            $else
-                <a href=#{postURL post}/like?user=#{name viewer}>Like
-            <br>
-            $if not $ null likes
-                Liked by #
-                $if doesLike
-                    you #
-                    $if not $ null likes'
-                        and #
-                #{compactUserList $ likes'}
+                you
+                $if not $ null likes
+                    ,
+            \ #{compactUserList $ likes}
     |]
 
-postURL :: Post -> T.Text
-postURL post = mconcat ["/", name $ author post, "/", T.pack $ show $ time post]
+
+postUrl :: Post -> T.Text
+postUrl post = mconcat ["/", name $ author post, "/", T.pack $ show $ time post]
 
 getAllUsers :: TX SocialDB [User]
 getAllUsers = do
