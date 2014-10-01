@@ -36,7 +36,6 @@ data User = User
     { name    :: Text
     , friends :: TVar (Set User)
     , posts   :: TVar (Map UTCTime Post)
-    -- wall :: TVar (Map UTCTime Post)
     }
 
 data Post = Post
@@ -44,7 +43,6 @@ data Post = Post
     , time    :: UTCTime
     , body    :: Text
     , likedBy :: TVar (Set User)
-    -- target :: User
     }
 
 instance Eq User where
@@ -106,17 +104,19 @@ data SocialException = UserAlreadyExists Text
 
 instance Exception SocialException
 
+
 newUser :: Text -> TX SocialDB User
 newUser name = do
     db <- getData
-    usermap <- liftSTM $ readTVar (users db)
-    when (Map.member name usermap) (throwTX $ UserAlreadyExists name)
-    friends <- liftSTM $ newTVar Set.empty
-    posts <- liftSTM $ newTVar Map.empty
-    let user = User{..}
-    liftSTM $ modifyTVar (users db) (Map.insert name user)
     record $ NewUser name
-    return user
+    liftSTM $ do
+        usermap <- readTVar (users db)
+        when (Map.member name usermap) (throwSTM $ UserAlreadyExists name)
+        friends <- newTVar Set.empty
+        posts <- newTVar Map.empty
+        let user = User{..}
+        modifyTVar (users db) (Map.insert name user)
+        return user
 
 newPost :: User -> Text -> TX SocialDB Post
 newPost author body = do
@@ -125,40 +125,43 @@ newPost author body = do
 
 addPost :: User -> UTCTime -> Text -> TX SocialDB Post
 addPost author time body = do
-    likedBy <- liftSTM $ newTVar Set.empty
-    let post = Post{..}
-    liftSTM $ modifyTVar (posts author) (Map.insert time post)
     record $ AddPost (name author) time body
-    return post
+    liftSTM $ do
+        likedBy <- newTVar Set.empty
+        let post = Post{..}
+        modifyTVar (posts author) (Map.insert time post)
+        return post
 
 getUser :: Text -> TX SocialDB User
 getUser name = do
     db <- getData
-    usermap <- liftSTM $ readTVar (users db)
-    case Map.lookup name usermap of
-        Just user -> return user
-        Nothing -> throwTX $ UserNotFound name
+    liftSTM $ do
+        usermap <- readTVar (users db)
+        case Map.lookup name usermap of
+            Just user -> return user
+            Nothing -> throwSTM $ UserNotFound name
 
 getPost :: User -> UTCTime -> TX SocialDB Post
-getPost author time = do
-    postmap <- liftSTM $ readTVar (posts author)
+getPost author time = liftSTM $ do
+    postmap <- readTVar (posts author)
     case Map.lookup time postmap of
         Just post -> return post
-        Nothing -> throwTX $ PostNotFound author time
+        Nothing -> throwSTM $ PostNotFound author time
 
 like :: User -> Post -> TX SocialDB ()
 like user post = do
-    liftSTM $ modifyTVar (likedBy post) (Set.insert user)
     record $ Like (name user) (name $ author post) (time post)
+    liftSTM $ modifyTVar (likedBy post) (Set.insert user)
 
 unlike :: User -> Post -> TX SocialDB ()
 unlike user post = do
-    liftSTM $ modifyTVar (likedBy post) (Set.delete user)
     record $ Unlike (name user) (name $ author post) (time post)
+    liftSTM $ modifyTVar (likedBy post) (Set.delete user)
 
 becomeFriends :: User -> User -> TX SocialDB ()
 becomeFriends user1 user2 = do
+    record $ BecomeFriends (name user1) (name user2)
     liftSTM $ do
         modifyTVar (friends user1) (Set.insert user2)
         modifyTVar (friends user2) (Set.insert user1)
-    record $ BecomeFriends (name user1) (name user2)
+
