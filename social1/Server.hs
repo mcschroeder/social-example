@@ -131,7 +131,7 @@ blaze body = html $ renderHtml [shamlet|
 banner :: L.Text -> Maybe User -> Html
 banner jumpbackUrl maybeViewer = [shamlet|
     <div #banner>
-        <a href="/">Funcbook
+        <a href="/">The Funcbook
         <div .userinfo>
             $maybe viewer <- maybeViewer
                 Logged in as <a href="#{userUrl viewer}">#{name viewer}</a>.
