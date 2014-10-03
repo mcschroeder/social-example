@@ -20,12 +20,10 @@ executable blog1
   main-is: Server.hs
   other-modules: BlogDB, TX
   build-depends: base ==4.7.*
-               , blaze-html ==0.7.*
+               , aeson >=0.8
                , containers ==0.5.*
                , bytestring ==0.10.*
                , scotty ==0.9.*
-               , scotty-cookie >=0.1
-               , shakespeare ==2.0.*
                , stm >=2.4.3 && <2.5
                , text ==1.2.*
                , time >=1.4 && <1.5

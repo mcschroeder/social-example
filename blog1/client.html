@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html>
+<head>
+<script src="../js/jquery-1.11.1.min.js"></script>
+<script src="../js/jquery.cookie-1.4.1.min.js"></script>
+<script type="text/javascript">
+Array.prototype.remove = function(value) {
+	var idx = this.indexOf(value);
+	if (idx != -1) { return this.splice(idx, 1); }
+	return false;
+}
+
+/*--------------------------------------------------------------------------*/
+
+function linkify(name) {
+	return "<a href=\"javascript:showProfile('" + name + "');\">" + name + "</a>"
+}
+
+function listify(users) {
+	var html = "";
+	$.each(users, function() {
+		html += "<li>"+linkify(this)+"</li>";
+	});
+	return html;
+}
+
+function updateSidebar() {	
+	var viewer = $.cookie("user");
+	if (viewer) {
+		$("#loginbox").html("You are " + linkify(viewer))
+					  .append("<br><a href=javascript:logout()>Logout</a>");
+	} else {
+		$("#loginbox").html("<a href=javascript:login()>Login</a>")
+					  .append("<br><a href=javascript:register()>Register</a>");
+	}
+
+	getUsers(function(users) {
+		users.remove(viewer);
+		$("#userlist").html(listify(users));
+	});
+}
+
+function showProfile(name) {
+	if (!name) {
+		$("#profile").hide();
+	} else {
+		getUser(name, 
+			function(user) {
+				$("#profile").show();
+				$("#profile .name").html(user.name);
+				updateFollowButton(user);
+				$("#profile .following").html(listify(user.following));
+				$("#profile .followers").html(listify(user.followers));
+			})
+	}
+}
+
+function updateFollowButton(user) {
+	var btn = $("#profile .followbtn");
+	btn.empty().attr("href", "");
+	var viewer = $.cookie("user");
+	if (viewer) {
+		if (user.followers.indexOf(viewer) >= 0) {
+			btn.html("Unfollow")
+			   .attr("href", "javascript:doUnfollow('"+user.name+"');")
+		} else if (user.name != viewer) {
+			btn.html("Follow")
+			   .attr("href", "javascript:doFollow('"+user.name+"');")			
+		}
+	}
+}
+
+function showWall(name) {
+	if (!name) {
+		$("wall").hide();
+	} else {
+		$("wall").show();
+		$("feed").empty();
+		var viewer = $.cookie("user");
+		if (viewer == name) {
+			$("postform").show();			
+		} else {
+			$("postform").hide();
+		}
+	}
+}
+
+/*--------------------------------------------------------------------------*/
+
+function logout() {
+	$.removeCookie("user");
+	updateSidebar();
+	showProfile();
+}
+
+function login() {
+	var name = window.prompt("Login");
+	getUser(name, 
+		function(user) {
+			$.cookie("user", user.name);
+			updateSidebar();
+			showProfile(name);
+		})
+}
+
+function register(name) {
+	var name = window.prompt("Register a new user");
+	newUser(name,
+		function(user) {
+			$.cookie("user", user.name);
+			updateSidebar();
+			showProfile(name);			
+		});
+}
+
+function doFollow(name) {
+	var viewer = $.cookie("user");
+	follow(viewer, name);
+	showProfile(name);
+}
+
+function doUnfollow(name) {
+	var viewer = $.cookie("user");
+	unfollow(viewer, name);
+	showProfile(name);
+}
+
+/*--------------------------------------------------------------------------*/
+
+function getUsers(success) {
+	$.ajax({
+		url: "http://localhost:3000/users", 
+		dataType: "json", 
+		type: "get",
+		success: success,
+    	error: showError
+	});
+}
+
+function getUser(name, success) {
+	$.ajax({
+		url: "http://localhost:3000/users/" + name,
+		dataType: "json",
+		type: "get",
+		success: success,
+		error: showError
+	})
+}
+
+function newUser(name, success) {
+	$.ajax({
+		url: "http://localhost:3000/users",
+		dataType: "json",
+		type: "put",
+		data: {"name": name},
+		success: success,
+		error: showError
+	})
+}
+
+function follow(name1, name2, success) {
+	$.ajax({
+		url: "http://localhost:3000/users/" + name1 + "/following",
+		dataType: "json",
+		type: "put",
+		data: {"name": name2},
+		success: success,
+		error: showError
+	})
+}
+
+function unfollow(name1, name2, success) {
+	$.ajax({
+		url: "http://localhost:3000/users/" + name1 + "/following",
+		dataType: "json",
+		type: "delete",
+		data: {"name": name2},
+		success: success,
+		error: showError
+	})
+}
+
+function showError(req, status, error) {
+	window.alert(req.responseText + "\n" + status + "\n" + error);
+}
+
+/*--------------------------------------------------------------------------*/
+
+$(document).ready(function() {	
+	updateSidebar();
+	showProfile();
+});
+
+</script>
+<style>
+body {
+	font-family: Lucida Grande;
+}
+
+#sidebar {
+    float: left;
+    width:25%;
+}
+
+#profile {
+    float:left;
+    width:25%;
+}
+
+#wall {
+    float:left;
+    width:50%;
+}
+
+</style>
+</head>
+<body>
+<div id="sidebar">
+	<div id="loginbox"></div>
+	<h3>Other users:</h3>
+	<ul id="userlist"></ul>
+</div>
+<div id="profile">
+	<h2 class="name"></h2>
+	<a class="followbtn"></a>
+	<h3>Following:</h3>
+	<ul class="following"></ul>	
+	<h3>Followers:</h3>
+	<ul class="followers"></ul>
+</div>
+<div id="wall">
+	<div id="feed">
+	</div>
+</div>
+</body>
+</html>

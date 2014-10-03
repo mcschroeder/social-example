@@ -5,22 +5,13 @@ module Server where
 
 import Control.Applicative
 import Control.Concurrent.STM
-import Control.Monad
 import Control.Monad.IO.Class
-import Data.List
-import Data.Monoid
+import Data.Aeson (object, (.=))
+import qualified Data.Aeson as Aeson
 import qualified Data.Map as Map
-import Data.Maybe
-import Data.Ord
 import qualified Data.Set as Set
-import qualified Data.Text as T
-import qualified Data.Text.Lazy as L
-import Data.Text.Lazy (Text)
-import Data.Time
-import Text.Blaze.Html.Renderer.Text
-import Text.Hamlet
+import Data.Text (Text)
 import Web.Scotty
-import Web.Scotty.Cookie
 
 import BlogDB
 import TX
@@ -31,140 +22,57 @@ main = do
 
     let tx = liftIO . runTX db
 
-    let getViewer = do
-            name <- getCookie "name"
-            case name of
-                Just name -> Just <$> tx (getUser name)
-                Nothing -> return Nothing
-
     scotty 3000 $ do
 
-        get "/style.css" $ do
-            file "./blog1/style.css"
+        get "/users" $ do
+            json =<< tx getAllUserNames
 
-        get "/" $ do
-            viewer <- getViewer
-            users <- tx $ do
-                db <- getData
-                usermap <- liftSTM $ readTVar (users db)
-                return $ map snd $ Map.toList usermap
+        put "/users" $ do
+            username <- param "name"
+            user <- tx $ newUser username
+            json $ object [ "name" .= name user ]
 
-            blaze $ banner "/" viewer <> [shamlet|
-                $forall user <- users
-                    <a href="#{userUrl user}">#{name user}
-                    <br>
-            |]
-
-        get "/register" $ do
-            blaze $ banner "/" Nothing <> [shamlet|
-                <form action=/register method=post>
-                    <input type=text name=name>
-                    <input type=submit value="Register new user">
-            |]
-
-        post "/register" $ do
+        get "/users/:name" $ do
             name <- param "name"
-            user <- tx $ newUser name
-            setSimpleCookie "name" name
-            redirect $ userUrl user
+            json =<< tx (getUserJson name)
 
-        post "/login" $ do
-            name <- param "name"
-            user <- tx $ getUser name
-            setSimpleCookie "name" name
-            jumpbackUrl <- param "jumpback"
-                            `rescue` (const $ return $ userUrl user)
-            redirect jumpbackUrl
+        put "/users/:name1/following" $ do
+            name1 <- param "name1"
+            name2 <- param "name"
+            tx $ do
+                user1 <- getUser name1
+                user2 <- getUser name2
+                user1 `follow` user2
+            json ()
 
-        post "/logout" $ do
-            deleteCookie "name"
-            jumpbackUrl <- param "jumpback"
-                            `rescue` (const $ return $ "/")
-            redirect jumpbackUrl
+        delete "/users/:name1/following" $ do
+            name1 <- param "name2"
+            name2 <- param "name"
+            tx $ do
+                user1 <- getUser name1
+                user2 <- getUser name2
+                user1 `unfollow` user2
+            json ()
 
-        get "/:name" $ do
-            name <- param "name"
-            viewer <- getViewer
-            page <- tx $ profile viewer =<< getUser name
-            blaze $ banner ("/" <> (L.fromStrict name)) viewer <> page
+        get "/users/:name/posts" $ do
+            undefined
 
-        post "/follow" $ do
-            name <- param "name"
-            (Just viewer) <- getViewer
-            tx $ follow viewer =<< getUser name
-            jumpbackUrl <- param "jumpback"
-                            `rescue` (const $ return $ userUrl viewer)
-            redirect jumpbackUrl
+        get "/users/:name/feed" $ do
+            undefined
 
-        post "/unfollow" $ do
-            name <- param "name"
-            (Just viewer) <- getViewer
-            tx $ unfollow viewer =<< getUser name
-            jumpbackUrl <- param "jumpback"
-                            `rescue` (const $ return $ userUrl viewer)
-            redirect jumpbackUrl
+        put "/users/:name/posts" $ do
+            undefined
 
-blaze :: Html -> ActionM ()
-blaze body = html $ renderHtml [shamlet|
-    $doctype 5
-    <html>
-        <head>
-            <link rel=stylesheet href=style.css>
-        <body>
-            #{body}
-    |]
+getAllUserNames :: TX BlogDB [Text]
+getAllUserNames = do
+    db <- getData
+    liftSTM $ map fst . Map.toList <$> readTVar (users db)
 
-banner :: Text -> Maybe User -> Html
-banner jumpbackUrl maybeViewer = [shamlet|
-     <div #banner>
-        <a href="/">µSpace
-        <div .userinfo>
-            $maybe viewer <- maybeViewer
-                Logged in as <a href="#{userUrl viewer}">#{name viewer}</a>.
-                <form action=/logout method=post>
-                    <input type=hidden name=jumpback value=#{jumpbackUrl}>
-                    <input type=submit value=Logout>
-            $nothing
-                <form action=/login method=post>
-                    <input type=hidden name=jumpback value=#{jumpbackUrl}>
-                    <input type=text name=name>
-                    <input type=submit value=Login>
-                <a href=/register>Register
-    |]
-
-userUrl :: User -> Text
-userUrl user = "/" <> L.fromStrict (name user)
-
-profile :: Maybe User -> User -> TX BlogDB Html
-profile maybeViewer user = do
-    following <- liftSTM $ readTVar (following user)
-    followers <- liftSTM $ readTVar (followers user)
-    return [shamlet|
-        <div .profile>
-            <h2>#{name user}
-            $maybe viewer <- maybeViewer
-                $if Set.member viewer followers
-                    <form .follow action=/unfollow method=post>
-                        <input type=hidden name=name value="#{name user}">
-                        <input type=hidden name=jumpback value="#{userUrl user}">
-                        <input type=submit value="Unfollow">
-                $elseif viewer /= user
-                    <form .follow action=/follow method=post>
-                        <input type=hidden name=name value="#{name user}">
-                        <input type=hidden name=jumpback value="#{userUrl user}">
-                        <input type=submit value="Follow">
-            <h3>Following:
-            $if Set.null following
-                none
-            $else
-                $forall f <- Set.toList following
-                    <a href="#{userUrl f}">#{name f}
-                    <br>
-            <h3>Followers:
-            $if Set.null followers
-                none
-            $else
-                $forall f <- Set.toList followers
-                    <a href="#{userUrl f}">#{name f}
-                    <br>
-    |]
+getUserJson :: Text -> TX BlogDB Aeson.Value
+getUserJson username = do
+    user <- getUser username
+    followers <- liftSTM $ Set.toList <$> readTVar (followers user)
+    following <- liftSTM $ Set.toList <$> readTVar (following user)
+    return $ object [ "name" .= name user
+                    , "followers" .= map name followers
+                    , "following" .= map name following ]
