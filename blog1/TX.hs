@@ -72,7 +72,9 @@ data Database d = Database
 
 openDatabase :: Durable d => FilePath -> d -> IO (Database d)
 openDatabase fp userData = do
-    fileHandle <- newMVar =<< openFile fp ReadWriteMode
+    h <- openFile fp ReadWriteMode
+    hSetBuffering h LineBuffering
+    fileHandle <- newMVar h
     let db = Database{..}
     deserialize db
     return db
