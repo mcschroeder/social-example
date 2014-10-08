@@ -46,7 +46,7 @@ main = do
             json ()
 
         delete "/users/:name1/following" $ do
-            name1 <- param "name2"
+            name1 <- param "name1"
             name2 <- param "name"
             tx $ do
                 user1 <- getUser name1
@@ -55,13 +55,26 @@ main = do
             json ()
 
         get "/users/:name/posts" $ do
-            undefined
+            name <- param "name"
+            posts <- tx $ do
+                user <- getUser name
+                liftSTM $ readTVar (posts user)
+            json posts
 
         get "/users/:name/feed" $ do
-            undefined
+            name <- param "name"
+            feed <- tx $ do
+                user <- getUser name
+                liftSTM $ feed user
+            json feed
 
-        put "/users/:name/posts" $ do
-            undefined
+        post "/users/:name/posts" $ do
+            name <- param "name"
+            body <- param "body"
+            tx $ do
+                user <- getUser name
+                newPost user body
+            json ()
 
 getAllUserNames :: TX BlogDB [Text]
 getAllUserNames = do
@@ -75,4 +88,11 @@ getUserJson username = do
     following <- liftSTM $ Set.toList <$> readTVar (following user)
     return $ object [ "name" .= name user
                     , "followers" .= map name followers
-                    , "following" .= map name following ]
+                    , "following" .= map name following
+                    ]
+
+instance Aeson.ToJSON Post where
+    toJSON (Post author time body) = object [ "author" .= name author
+                                            , "time" .= time
+                                            , "body" .= body
+                                            ]

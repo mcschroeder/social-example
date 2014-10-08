@@ -3,6 +3,7 @@
 <head>
 <script src="../js/jquery-1.11.1.min.js"></script>
 <script src="../js/jquery.cookie-1.4.1.min.js"></script>
+<script src="../js/jquery-dateFormat.min.js"></script>
 <script type="text/javascript">
 Array.prototype.remove = function(value) {
 	var idx = this.indexOf(value);
@@ -13,7 +14,7 @@ Array.prototype.remove = function(value) {
 /*--------------------------------------------------------------------------*/
 
 function linkify(name) {
-	return "<a href=\"javascript:showProfile('" + name + "');\">" + name + "</a>"
+	return "<a href=\"javascript:showPage('" + name + "');\">" + name + "</a>"
 }
 
 function listify(users) {
@@ -40,7 +41,12 @@ function updateSidebar() {
 	});
 }
 
-function showProfile(name) {
+function showPage(name) {
+	updateProfile(name);
+	updateWall(name);
+}
+
+function updateProfile(name) {
 	if (!name) {
 		$("#profile").hide();
 	} else {
@@ -49,6 +55,7 @@ function showProfile(name) {
 				$("#profile").show();
 				$("#profile .name").html(user.name);
 				updateFollowButton(user);
+				updatePostForm(user);
 				$("#profile .following").html(listify(user.following));
 				$("#profile .followers").html(listify(user.followers));
 			})
@@ -70,19 +77,38 @@ function updateFollowButton(user) {
 	}
 }
 
-function showWall(name) {
-	if (!name) {
-		$("wall").hide();
+function updatePostForm(user) {
+	var viewer = $.cookie("user");
+	var form = $("#profile .postform");
+	form[0].reset();	
+	if (viewer && user.name == viewer) {
+		form.show();
 	} else {
-		$("wall").show();
-		$("feed").empty();
-		var viewer = $.cookie("user");
-		if (viewer == name) {
-			$("postform").show();			
-		} else {
-			$("postform").hide();
-		}
+		form.hide();
 	}
+}
+
+function updateWall(name) {
+	var viewer = $.cookie("user");
+	$("#wall").empty();
+	if (viewer == name) {
+		getFeed(name,
+			function(posts) {
+				$("#wall").html($.map(posts, renderPost));
+			})
+	} else {
+		getPosts(name,
+			function(posts) {
+				$("#wall").html($.map(posts, renderPost));
+			})
+	}
+}
+
+function renderPost(post) {
+	return "<div class=post>"
+		 + "<b class=author>" + linkify(post.author) + "</b>"
+		 + "<i class=time>" + jQuery.format.prettyDate(post.time) + "</i>"
+		 + "<p class=body>" + post.body + "</p>"
 }
 
 /*--------------------------------------------------------------------------*/
@@ -90,7 +116,7 @@ function showWall(name) {
 function logout() {
 	$.removeCookie("user");
 	updateSidebar();
-	showProfile();
+	showPage();
 }
 
 function login() {
@@ -99,7 +125,7 @@ function login() {
 		function(user) {
 			$.cookie("user", user.name);
 			updateSidebar();
-			showProfile(name);
+			showPage(name);
 		})
 }
 
@@ -109,27 +135,35 @@ function register(name) {
 		function(user) {
 			$.cookie("user", user.name);
 			updateSidebar();
-			showProfile(name);			
+			showPage(name);			
 		});
 }
 
 function doFollow(name) {
 	var viewer = $.cookie("user");
 	follow(viewer, name);
-	showProfile(name);
+	showPage(name);
 }
 
 function doUnfollow(name) {
 	var viewer = $.cookie("user");
 	unfollow(viewer, name);
-	showProfile(name);
+	showPage(name);
+}
+
+function doPost(body) {	
+	var viewer = $.cookie("user");
+	post(viewer, body);
+	showPage(viewer);	
 }
 
 /*--------------------------------------------------------------------------*/
 
+const server = "http://localhost:3000"
+
 function getUsers(success) {
 	$.ajax({
-		url: "http://localhost:3000/users", 
+		url: server + "/users", 
 		dataType: "json", 
 		type: "get",
 		success: success,
@@ -139,7 +173,7 @@ function getUsers(success) {
 
 function getUser(name, success) {
 	$.ajax({
-		url: "http://localhost:3000/users/" + name,
+		url: server + "/users/" + name,
 		dataType: "json",
 		type: "get",
 		success: success,
@@ -149,7 +183,7 @@ function getUser(name, success) {
 
 function newUser(name, success) {
 	$.ajax({
-		url: "http://localhost:3000/users",
+		url: server + "/users",
 		dataType: "json",
 		type: "put",
 		data: {"name": name},
@@ -160,7 +194,7 @@ function newUser(name, success) {
 
 function follow(name1, name2, success) {
 	$.ajax({
-		url: "http://localhost:3000/users/" + name1 + "/following",
+		url: server + "/users/" + name1 + "/following",
 		dataType: "json",
 		type: "put",
 		data: {"name": name2},
@@ -171,10 +205,41 @@ function follow(name1, name2, success) {
 
 function unfollow(name1, name2, success) {
 	$.ajax({
-		url: "http://localhost:3000/users/" + name1 + "/following",
+		url: server + "/users/" + name1 + "/following",
 		dataType: "json",
 		type: "delete",
 		data: {"name": name2},
+		success: success,
+		error: showError
+	})
+}
+
+function post(name, body, success) {
+	$.ajax({
+		url: server + "/users/" + name + "/posts",
+		dataType: "json",
+		type: "post",
+		data: {"body": body},
+		success: success,
+		error: showError
+	})
+}
+
+function getPosts(name, success) {
+	$.ajax({
+		url: server + "/users/" + name + "/posts",
+		dataType: "json",
+		type: "get",
+		success: success,
+		error: showError
+	})
+}
+
+function getFeed(name, success) {
+	$.ajax({
+		url: server + "/users/" + name + "/feed",
+		dataType: "json",
+		type: "get",
 		success: success,
 		error: showError
 	})
@@ -188,7 +253,8 @@ function showError(req, status, error) {
 
 $(document).ready(function() {	
 	updateSidebar();
-	showProfile();
+	var viewer = $.cookie("user");
+	showPage(viewer);
 });
 
 </script>
@@ -212,6 +278,25 @@ body {
     width:50%;
 }
 
+.post {
+	padding: 5px 5px 5px 5px;
+	margin-bottom: 10px;
+	background-color: white;
+}
+
+.post .author {
+	font-size: small;
+}
+
+.post .time {
+	display: block;
+	font-size: small;
+	color: gray;
+}
+
+.post .body {
+	margin: 5px auto;
+}
 </style>
 </head>
 <body>
@@ -223,14 +308,16 @@ body {
 <div id="profile">
 	<h2 class="name"></h2>
 	<a class="followbtn"></a>
+	<form class="postform" action="#" onSubmit="javascript:doPost(this.body.value);return false;">
+		<input type="text" name="body"><br>
+		<input type="submit" value="Post">
+	</form>
 	<h3>Following:</h3>
 	<ul class="following"></ul>	
 	<h3>Followers:</h3>
 	<ul class="followers"></ul>
 </div>
 <div id="wall">
-	<div id="feed">
-	</div>
 </div>
 </body>
 </html>
