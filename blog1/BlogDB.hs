@@ -16,6 +16,8 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import Data.Time
 
+import GHC.Conc.Sync (unsafeIOToSTM)
+
 import TX
 
 ------------------------------------------------------------------------------
@@ -86,10 +88,12 @@ feed user = do
 
 waitForFeed :: User -> UTCTime -> STM [Post]
 waitForFeed user lastSeen = do
-    posts <- feed user
-    if time (head posts) > lastSeen
-        then return posts
-        else retry
+    let isNew post = diffUTCTime (time post) lastSeen > 0.1
+    posts <- takeWhile isNew <$> feed user
+    if null posts then retry else return posts
+    --if time (head posts) > lastSeen
+        --then return posts
+        --else retry
 
 newUser :: Text -> TX BlogDB User
 newUser name = do

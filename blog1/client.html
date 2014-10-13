@@ -88,13 +88,18 @@ function updatePostForm(user) {
 	}
 }
 
+var pollReq;
+
 function updateWall(name) {
-	var viewer = $.cookie("user");
+	if (pollReq) pollReq.abort();
 	$("#wall").empty();
+	if (!name) return;
+	var viewer = $.cookie("user");
 	if (viewer == name) {
 		getFeed(name,
 			function(posts) {
 				$("#wall").html($.map(posts, renderPost));
+				pollFeed(name, posts[0].time);
 			})
 	} else {
 		getPosts(name,
@@ -102,6 +107,29 @@ function updateWall(name) {
 				$("#wall").html($.map(posts, renderPost));
 			})
 	}
+}
+
+function pollFeed(name, lastKnownTime) {
+	alert("pollFeed " + name + " " + lastKnownTime);
+	pollReq = $.ajax({
+		url: server + "/users/" + name + "/feed",
+		dataType: "json",
+		type: "get",
+		data: {"lastKnownTime": lastKnownTime},
+		success: function(posts) {
+			alert("success");
+			$("#wall").prepend($.map(posts, renderPost));
+			pollFeed(name, posts[0].time);
+		},
+		timeout: 30000,
+		error: function(x,t,m) {
+			if (t == "timeout") {
+				pollFeed(name, lastKnownTime);
+			} else {
+				showError(x,t,m);
+			}
+		}
+	})
 }
 
 function renderPost(post) {

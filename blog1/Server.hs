@@ -1,5 +1,4 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE QuasiQuotes #-}
 
 module Server where
 
@@ -11,6 +10,11 @@ import qualified Data.Aeson as Aeson
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import Data.Text (Text)
+import Data.Time
+import qualified Data.Text.Lazy as L
+import Network.HTTP.Types.Status (requestTimeout408)
+import System.Locale
+import System.Timeout
 import Web.Scotty
 
 import BlogDB
@@ -63,6 +67,16 @@ main = do
 
         get "/users/:name/feed" $ do
             name <- param "name"
+            lastKnownTime <- param "lastKnownTime" `rescue` const next
+            feed <- liftIO $ timeout (30 * 10^6) $ runTX db $ do
+                user <- getUser name
+                liftSTM $ waitForFeed user lastKnownTime
+            case feed of
+                Just posts -> json posts
+                Nothing -> status requestTimeout408
+
+        get "/users/:name/feed" $ do
+            name <- param "name"
             feed <- tx $ do
                 user <- getUser name
                 liftSTM $ feed user
@@ -96,3 +110,8 @@ instance Aeson.ToJSON Post where
                                             , "time" .= time
                                             , "body" .= body
                                             ]
+
+instance Parsable UTCTime where
+    parseParam = maybe (Left "no parse") Right
+               . parseTime defaultTimeLocale "%FT%T%Q%Z"
+               . L.unpack
