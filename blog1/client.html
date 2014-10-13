@@ -246,12 +246,24 @@ function getFeed(name, success) {
 }
 
 function showError(req, status, error) {
-	window.alert(req.responseText + "\n" + status + "\n" + error);
+	window.alert(req.responseText + "<br>" + status + "<br>" + error);
+}
+
+/*--------------------------------------------------------------------------*/
+
+function alert(msg) {
+	var time = $.format.date(new Date(), "HH:mm:ss.SSS");
+	$("#alert").show().append("<br>["+time+"] " + msg);
+}
+
+function clearAlert() {
+	$("#alert").hide().html("<a href='javascript:clearAlert()'>clear messages</a>");
 }
 
 /*--------------------------------------------------------------------------*/
 
 $(document).ready(function() {	
+	clearAlert();
 	updateSidebar();
 	var viewer = $.cookie("user");
 	showPage(viewer);
@@ -297,9 +309,17 @@ body {
 .post .body {
 	margin: 5px auto;
 }
+
+#alert {
+	background-color: red;
+	margin-bottom: 10px;
+	padding: 5px;
+}
+
 </style>
 </head>
 <body>
+<div id="alert"></div>
 <div id="sidebar">
 	<div id="loginbox"></div>
 	<h3>Other users:</h3>
