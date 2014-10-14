@@ -5,39 +5,31 @@
 <script src="../js/jquery.cookie-1.4.1.min.js"></script>
 <script src="../js/jquery-dateFormat.min.js"></script>
 <script type="text/javascript">
-Array.prototype.remove = function(value) {
-	var idx = this.indexOf(value);
-	if (idx != -1) { return this.splice(idx, 1); }
-	return false;
+/*--------------------------------------------------------------------------*/
+
+$(document).ready(function() {
+	clearAlert();
+	updateSidebar();
+	showPage($.cookie("user"));
+});
+
+function clearAlert() {
+	$("#alert").hide().html("<a href='javascript:clearAlert()'>clear messages</a>");
+}
+
+function alert(msg) {
+	var time = $.format.date(new Date(), "HH:mm:ss.SSS");
+	$("#alert").show().append("<br>["+time+"] " + msg);
 }
 
 /*--------------------------------------------------------------------------*/
 
-function linkify(name) {
-	return "<a href=\"javascript:showPage('" + name + "');\">" + name + "</a>"
-}
+const server = "http://localhost:3000"
 
-function listify(users) {
-	var html = "";
-	$.each(users, function() {
-		html += "<li>"+linkify(this)+"</li>";
-	});
-	return html;
-}
-
-function updateSidebar() {	
-	var viewer = $.cookie("user");
-	if (viewer) {
-		$("#loginbox").html("You are " + linkify(viewer))
-					  .append("<br><a href=javascript:logout()>Logout</a>");
-	} else {
-		$("#loginbox").html("<a href=javascript:login()>Login</a>")
-					  .append("<br><a href=javascript:register()>Register</a>");
-	}
-
-	getUsers(function(users) {
-		users.remove(viewer);
-		$("#userlist").html(listify(users));
+function updateSidebar() {
+	$("#sidebar").html(renderLoginForm());
+	$.get(server + "/users", function(users) {
+		$("#sidebar").append(renderOtherUsersList(users));
 	});
 }
 
@@ -48,95 +40,46 @@ function showPage(name) {
 
 function updateProfile(name) {
 	if (!name) {
-		$("#profile").hide();
+		$("#profile").empty();
 	} else {
-		getUser(name, 
-			function(user) {
-				$("#profile").show();
-				$("#profile .name").html(user.name);
-				updateFollowButton(user);
-				updatePostForm(user);
-				$("#profile .following").html(listify(user.following));
-				$("#profile .followers").html(listify(user.followers));
-			})
+		$.get(server + "/users/" + name, function(user) {
+			$("#profile").html(renderProfile(user))
+		});
 	}
 }
 
-function updateFollowButton(user) {
-	var btn = $("#profile .followbtn");
-	btn.empty().attr("href", "");
-	var viewer = $.cookie("user");
-	if (viewer) {
-		if (user.followers.indexOf(viewer) >= 0) {
-			btn.html("Unfollow")
-			   .attr("href", "javascript:doUnfollow('"+user.name+"');")
-		} else if (user.name != viewer) {
-			btn.html("Follow")
-			   .attr("href", "javascript:doFollow('"+user.name+"');")			
-		}
-	}
-}
-
-function updatePostForm(user) {
-	var viewer = $.cookie("user");
-	var form = $("#profile .postform");
-	form[0].reset();	
-	if (viewer && user.name == viewer) {
-		form.show();
-	} else {
-		form.hide();
-	}
-}
-
-var pollReq;
+var pollRequest;
 
 function updateWall(name) {
-	if (pollReq) pollReq.abort();
-	$("#wall").empty();
-	if (!name) return;
-	var viewer = $.cookie("user");
-	if (viewer == name) {
-		getFeed(name,
-			function(posts) {
-				$("#wall").html($.map(posts, renderPost));
-				pollFeed(name, posts[0].time);
-			})
+	if (pollRequest) pollRequest.abort();
+	if (!name) {
+		$("#wall").empty();
+	} else if (name == $.cookie("user")) {
+		$.get(server + "/users/" + name + "/feed", function(posts) {
+			$("#wall").html($.map(posts, renderPost));
+			pollFeed(name, posts[0] ? posts[0].time : "0000-00-00T00:00:00.0Z");
+		})
 	} else {
-		getPosts(name,
-			function(posts) {
-				$("#wall").html($.map(posts, renderPost));
-			})
+		$.get(server + "/users/" + name + "/posts", function(posts) {
+			$("#wall").html($.map(posts, renderPost));
+		})
 	}
 }
 
 function pollFeed(name, lastKnownTime) {
-	alert("pollFeed " + name + " " + lastKnownTime);
-	pollReq = $.ajax({
-		url: server + "/users/" + name + "/feed",
-		dataType: "json",
-		type: "get",
+	pollRequest = $.ajax(server + "/users/" + name + "/feed", {
 		data: {"lastKnownTime": lastKnownTime},
+		timeout: 30000,
 		success: function(posts) {
-			alert("success");
 			$("#wall").prepend($.map(posts, renderPost));
 			pollFeed(name, posts[0].time);
 		},
-		timeout: 30000,
 		error: function(x,t,m) {
 			if (t == "timeout") {
 				pollFeed(name, lastKnownTime);
-			} else {
-				showError(x,t,m);
 			}
 		}
 	})
-}
-
-function renderPost(post) {
-	return "<div class=post>"
-		 + "<b class=author>" + linkify(post.author) + "</b>"
-		 + "<i class=time>" + jQuery.format.prettyDate(post.time) + "</i>"
-		 + "<p class=body>" + post.body + "</p>"
 }
 
 /*--------------------------------------------------------------------------*/
@@ -149,154 +92,140 @@ function logout() {
 
 function login() {
 	var name = window.prompt("Login");
-	getUser(name, 
-		function(user) {
+	$.ajax(server + "/users/" + name, {
+		success: function(user) {
 			$.cookie("user", user.name);
 			updateSidebar();
-			showPage(name);
-		})
+			showPage(user.name);
+		},
+		error: function(x,t,m) {
+			alert(x.responseText);
+		}
+	})
 }
 
 function register(name) {
 	var name = window.prompt("Register a new user");
-	newUser(name,
-		function(user) {
-			$.cookie("user", user.name);
-			updateSidebar();
-			showPage(name);			
-		});
-}
-
-function doFollow(name) {
-	var viewer = $.cookie("user");
-	follow(viewer, name);
-	showPage(name);
-}
-
-function doUnfollow(name) {
-	var viewer = $.cookie("user");
-	unfollow(viewer, name);
-	showPage(name);
-}
-
-function doPost(body) {	
-	var viewer = $.cookie("user");
-	post(viewer, body);
-	showPage(viewer);	
-}
-
-/*--------------------------------------------------------------------------*/
-
-const server = "http://localhost:3000"
-
-function getUsers(success) {
-	$.ajax({
-		url: server + "/users", 
-		dataType: "json", 
-		type: "get",
-		success: success,
-    	error: showError
-	});
-}
-
-function getUser(name, success) {
-	$.ajax({
-		url: server + "/users/" + name,
-		dataType: "json",
-		type: "get",
-		success: success,
-		error: showError
-	})
-}
-
-function newUser(name, success) {
-	$.ajax({
-		url: server + "/users",
-		dataType: "json",
+	$.ajax(server + "/users", {
 		type: "put",
 		data: {"name": name},
-		success: success,
-		error: showError
+		success: function(user) {
+			$.cookie("user", user.name);
+			updateSidebar();
+			showPage(user.name);
+		},
+		error: function(x,t,m) {
+			alert(x.responseText);
+		}
 	})
 }
 
-function follow(name1, name2, success) {
-	$.ajax({
-		url: server + "/users/" + name1 + "/following",
-		dataType: "json",
-		type: "put",
-		data: {"name": name2},
-		success: success,
-		error: showError
+function follow(name) {
+	var visitor = $.cookie("user");
+	$.ajax(server + "/users/" + visitor + "/following", {
+		type: "put", 
+		data: {"name": name},
+		success: function() { 
+			showPage(name) 
+		}
 	})
 }
 
-function unfollow(name1, name2, success) {
-	$.ajax({
-		url: server + "/users/" + name1 + "/following",
-		dataType: "json",
-		type: "delete",
-		data: {"name": name2},
-		success: success,
-		error: showError
+function unfollow(name) {
+	var visitor = $.cookie("user");
+	$.ajax(server + "/users/" + visitor + "/following", {
+		type: "delete", 
+		data: {"name": name},
+		success: function() { 
+			showPage(name) 
+		}
 	})
 }
 
-function post(name, body, success) {
-	$.ajax({
-		url: server + "/users/" + name + "/posts",
-		dataType: "json",
+function post(body) {
+	var visitor = $.cookie("user");
+	$.ajax(server + "/users/" + visitor + "/posts", {
 		type: "post",
 		data: {"body": body},
-		success: success,
-		error: showError
+		success: function() {
+			showPage(visitor)
+		}
 	})
-}
-
-function getPosts(name, success) {
-	$.ajax({
-		url: server + "/users/" + name + "/posts",
-		dataType: "json",
-		type: "get",
-		success: success,
-		error: showError
-	})
-}
-
-function getFeed(name, success) {
-	$.ajax({
-		url: server + "/users/" + name + "/feed",
-		dataType: "json",
-		type: "get",
-		success: success,
-		error: showError
-	})
-}
-
-function showError(req, status, error) {
-	window.alert(req.responseText + "<br>" + status + "<br>" + error);
 }
 
 /*--------------------------------------------------------------------------*/
 
-function alert(msg) {
-	var time = $.format.date(new Date(), "HH:mm:ss.SSS");
-	$("#alert").show().append("<br>["+time+"] " + msg);
+function linkify(name) {
+	return "<a href=\"javascript:showPage('" + name + "');\">" + name + "</a>"
 }
 
-function clearAlert() {
-	$("#alert").hide().html("<a href='javascript:clearAlert()'>clear messages</a>");
+function listify(users) {	
+	var items = "";
+	$.each(users, function() {
+		items += "<li>"+linkify(this)+"</li>";
+	});
+	return "<ul>" + items + "</ul>";
 }
 
+function renderLoginForm() {
+	var visitor = $.cookie("user");
+	if (visitor) {
+		return "You are " + linkify(visitor) + "<br>"
+			 + "<a href=\"javascript:logout();\">Logout</a>"
+	} else {
+		return "<a href=\"javascript:login();\">Login</a><br>"
+			 + "<a href=\"javascript:register();\">Register</a>"
+	}
+}
+
+function renderOtherUsersList(users) {
+	var visitor = $.cookie("user");
+	var idx = users.indexOf(visitor);
+	if (idx != -1) { users.splice(idx, 1); }
+	return "<h3>Other users:</h3>"
+		 + listify(users);
+}
+
+function renderProfile(user) {
+	return "<h2>" + user.name + "</h2>"
+		 + renderFollowButton(user)
+		 + renderPostForm(user)
+		 + "<h3>Following:</h3>" + listify(user.following)
+		 + "<h3>Followers:</h3>" + listify(user.followers)
+}
+
+function renderPostForm(user) {
+	var visitor = $.cookie("user");
+	if (visitor && visitor == user.name) {	
+		return "<form action='#'"
+		     + " onSubmit='javascript:post(this.body.value);return false;'>"
+	    	 + "<input type=text name=body><br>"
+	     	 + "<input type=submit value=Post>"
+	     	 + "</form>"
+	} else {
+		return "";
+	}
+}
+
+function renderFollowButton(user) {
+	var visitor = $.cookie("user");
+	if (visitor && user.followers.indexOf(visitor) >= 0) {
+		return "<a href=\"javascript:unfollow('"+user.name+"');\">Unfollow</a>";
+	} else if (visitor && visitor != user.name) {
+		return "<a href=\"javascript:follow('"+user.name+"');\">Follow</a>";
+	} else {
+		return ""
+	}
+}
+
+function renderPost(post) {
+	return "<div class=post>"
+		 + "<b class=author>" + linkify(post.author) + "</b>"
+		 + "<i class=time>" + jQuery.format.prettyDate(post.time) + "</i>"
+		 + "<p class=body>" + post.body + "</p>"
+		 + "</div>"
+}
 /*--------------------------------------------------------------------------*/
-
-$(document).ready(function() {	
-	clearAlert();
-	updateSidebar();
-	var viewer = $.cookie("user");
-	showPage(viewer);
-});
-
 </script>
 <style>
 body {
@@ -348,24 +277,8 @@ body {
 </head>
 <body>
 <div id="alert"></div>
-<div id="sidebar">
-	<div id="loginbox"></div>
-	<h3>Other users:</h3>
-	<ul id="userlist"></ul>
-</div>
-<div id="profile">
-	<h2 class="name"></h2>
-	<a class="followbtn"></a>
-	<form class="postform" action="#" onSubmit="javascript:doPost(this.body.value);return false;">
-		<input type="text" name="body"><br>
-		<input type="submit" value="Post">
-	</form>
-	<h3>Following:</h3>
-	<ul class="following"></ul>	
-	<h3>Followers:</h3>
-	<ul class="followers"></ul>
-</div>
-<div id="wall">
-</div>
+<div id="sidebar"></div>
+<div id="profile"></div>
+<div id="wall"></div>
 </body>
 </html>
