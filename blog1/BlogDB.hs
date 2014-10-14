@@ -16,8 +16,6 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import Data.Time
 
-import GHC.Conc.Sync (unsafeIOToSTM)
-
 import TX
 
 ------------------------------------------------------------------------------
@@ -100,6 +98,9 @@ newUser name = do
     db <- getData
     record $ NewUser name
     liftSTM $ do
+        usermap <- readTVar (users db)
+        unless (Map.notMember name usermap)
+               (error $ "user already exists: " ++ show name)
         posts <- newTVar []
         followers <- newTVar Set.empty
         following <- newTVar Set.empty
