@@ -3,9 +3,9 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
 
-module BlogDB
-    ( BlogDB(..), User(..), Post(..)
-    , emptyBlogDB
+module SocialDB
+    ( SocialDB(..), User(..), Post(..)
+    , emptySocialDB
     , feed, waitForFeed
     , newUser, getUser
     , newPost
@@ -29,20 +29,20 @@ import TX
 
 ------------------------------------------------------------------------------
 
-data BlogDB = BlogDB
+data SocialDB = SocialDB
     { users :: TVar (Map Text User) }
 
 data User = User
-    { name :: Text
-    , posts :: TVar [Post]
+    { name      :: Text
+    , posts     :: TVar [Post]
     , following :: TVar (Set User)
     , followers :: TVar (Set User)
     }
 
 data Post = Post
     { author :: User
-    , time :: UTCTime
-    , body :: Text
+    , time   :: UTCTime
+    , body   :: Text
     }
 
 instance Eq User where
@@ -51,18 +51,18 @@ instance Eq User where
 instance Ord User where
     compare = comparing name
 
-emptyBlogDB :: IO BlogDB
-emptyBlogDB = do
+emptySocialDB :: IO SocialDB
+emptySocialDB = do
     users <- newTVarIO Map.empty
-    return BlogDB{..}
+    return SocialDB{..}
 
 ------------------------------------------------------------------------------
 
-instance Durable BlogDB where
-    data Operation BlogDB = NewUser Text
-                          | NewPost Text UTCTime Text
-                          | Follow Text Text
-                          | Unfollow Text Text
+instance Durable SocialDB where
+    data Operation SocialDB = NewUser Text
+                            | NewPost Text UTCTime Text
+                            | Follow Text Text
+                            | Unfollow Text Text
 
     replay (NewUser name) = void $ newUser name
 
@@ -96,7 +96,7 @@ waitForFeed user lastSeen = do
   where
     isNew post = diffUTCTime (time post) lastSeen > 0.1
 
-newUser :: Text -> TX BlogDB User
+newUser :: Text -> TX SocialDB User
 newUser name = do
     db <- getData
     record $ NewUser name
@@ -111,7 +111,7 @@ newUser name = do
         modifyTVar (users db) (Map.insert name user)
         return user
 
-getUser :: Text -> TX BlogDB User
+getUser :: Text -> TX SocialDB User
 getUser name = do
     db <- getData
     usermap <- liftSTM $ readTVar (users db)
@@ -119,12 +119,12 @@ getUser name = do
         Just user -> return user
         Nothing -> error $ "user not found: " ++ show name
 
-newPost :: User -> Text -> TX BlogDB Post
+newPost :: User -> Text -> TX SocialDB Post
 newPost author body = do
     time <- unsafeIOToTX getCurrentTime
     newPost_ author time body
 
-newPost_ :: User -> UTCTime -> Text -> TX BlogDB Post
+newPost_ :: User -> UTCTime -> Text -> TX SocialDB Post
 newPost_ author time body = do
     record $ NewPost (name author) time body
     liftSTM $ do
@@ -132,14 +132,14 @@ newPost_ author time body = do
         modifyTVar (posts author) (post:)
         return post
 
-follow :: User -> User -> TX BlogDB ()
+follow :: User -> User -> TX SocialDB ()
 follow user1 user2 = do
     record $ Follow (name user1) (name user2)
     liftSTM $ do
         modifyTVar (following user1) (Set.insert user2)
         modifyTVar (followers user2) (Set.insert user1)
 
-unfollow :: User -> User -> TX BlogDB ()
+unfollow :: User -> User -> TX SocialDB ()
 unfollow user1 user2 = do
     record $ Unfollow (name user1) (name user2)
     liftSTM $ do
@@ -148,4 +148,4 @@ unfollow user1 user2 = do
 
 ------------------------------------------------------------------------------
 
-deriveSafeCopyIndexedType 1 'base ''Operation [''BlogDB]
+deriveSafeCopyIndexedType 1 'base ''Operation [''SocialDB]

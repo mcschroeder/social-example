@@ -11,14 +11,13 @@ category:            Sample Code
 build-type:          Simple
 cabal-version:       >=1.10
 
--- extra-source-files:
+extra-source-files: js/*
+                  , social1/client.html
 
--- ---------------------------------------------------------------------------
-
-executable blog1
-  hs-source-dirs: blog1
+executable social1
+  hs-source-dirs: social1
   main-is: Server.hs
-  other-modules: BlogDB, TX
+  other-modules: SocialDB, TX
   build-depends: base ==4.7.*
                , aeson >=0.8
                , cereal ==0.4.*
@@ -35,42 +34,23 @@ executable blog1
   ghc-options: -threaded
   default-language: Haskell2010
 
---executable social1
---  hs-source-dirs: social1
---  main-is: Server.hs
---  other-modules: SocialDB, TX
---  build-depends: base ==4.7.*
---               , blaze-html ==0.7.*
---               , bytestring ==0.10.*
---               , containers ==0.5.*
---               , scotty ==0.9.*
---               , scotty-cookie >=0.1
---               , shakespeare ==2.0.*
---               , stm >=2.4.3 && <2.5
---               , text ==1.2.*
---               , time >=1.4 && <1.5
---               , transformers ==0.4.*
---  ghc-options: -threaded
---  default-language: Haskell2010
-
-executable todo1
-  main-is:             todo1.hs
-  -- other-modules:
-  -- other-extensions:
-  build-depends:       base >=4.7 && <4.8
-  -- hs-source-dirs:
-  ghc-options:         -threaded
-  default-language:    Haskell2010
-
-
---executable bank-containers
---    main-is: bank-containers.hs
---    build-depends: base ==4.7.*, async, containers, random, stm, criterion
---    ghc-options: -threaded
---    default-language: Haskell2010
-
---executable bank-ctrie
---    main-is: bank-ctrie.hs
---    build-depends: base ==4.7.*, async, ctrie, random, stm, criterion
---    ghc-options: -threaded
---    default-language: Haskell2010
+executable social2
+  hs-source-dirs: social2
+  main-is: Server.hs
+  other-modules: SocialDB, TX
+  build-depends: base ==4.7.*
+               , aeson >=0.8
+               , cereal ==0.4.*
+               , containers ==0.5.*
+               , bytestring ==0.10.*
+               , http-types ==0.8.*
+               , old-locale ==1.0.*
+               , random ==1.1.*
+               , safecopy ==0.8.*
+               , scotty ==0.9.*
+               , stm >=2.4.3 && <2.5
+               , text ==1.2.*
+               , time ==1.4.*
+               , transformers ==0.4.*
+  ghc-options: -threaded
+  default-language: Haskell2010
