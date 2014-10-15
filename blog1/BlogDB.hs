@@ -3,12 +3,18 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
 
-module BlogDB where
+module BlogDB
+    ( BlogDB(..), User(..), Post(..)
+    , emptyBlogDB
+    , feed, waitForFeed
+    , newUser, getUser
+    , newPost
+    , follow, unfollow
+    ) where
 
 import Control.Applicative
 import Control.Concurrent.STM
 import Control.Monad
-import qualified Data.ByteString.Char8 as C
 import Data.List
 import Data.Map (Map)
 import qualified Data.Map as Map
@@ -142,5 +148,4 @@ unfollow user1 user2 = do
 
 ------------------------------------------------------------------------------
 
--- TODO: maybe add Generic deriving to SafeCopy
 deriveSafeCopyIndexedType 1 'base ''Operation [''BlogDB]

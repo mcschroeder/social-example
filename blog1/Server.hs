@@ -12,7 +12,7 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import Data.Time
 import qualified Data.Text.Lazy as L
-import Network.HTTP.Types.Status (requestTimeout408)
+import Network.HTTP.Types.Status
 import System.Locale
 import System.Timeout
 import Web.Scotty
@@ -20,47 +20,48 @@ import Web.Scotty
 import BlogDB
 import TX
 
+------------------------------------------------------------------------------
+
 main :: IO ()
 main = do
     db <- openDatabase "blog" =<< emptyBlogDB
-
-    let tx = liftIO . runTX db
-
     scotty 3000 $ do
 
         get "/users" $ do
-            json =<< tx getAllUserNames
+            names <- liftIO $ runTX db getAllUserNames
+            json names
 
         put "/users" $ do
             username <- param "name"
-            user <- tx $ newUser username
+            user <- liftIO $ runTX db $ newUser username
             json $ object [ "name" .= name user ]
 
         get "/users/:name" $ do
             name <- param "name"
-            json =<< tx (getUserJson name)
+            user <- liftIO $ runTX db $ getUserJson name
+            json user
 
         put "/users/:name1/following" $ do
             name1 <- param "name1"
             name2 <- param "name"
-            tx $ do
+            liftIO $ runTX db $ do
                 user1 <- getUser name1
                 user2 <- getUser name2
                 user1 `follow` user2
-            json ()
+            status noContent204
 
         delete "/users/:name1/following" $ do
             name1 <- param "name1"
             name2 <- param "name"
-            tx $ do
+            liftIO $ runTX db $ do
                 user1 <- getUser name1
                 user2 <- getUser name2
                 user1 `unfollow` user2
-            json ()
+            status noContent204
 
         get "/users/:name/posts" $ do
             name <- param "name"
-            posts <- tx $ do
+            posts <- liftIO $ runTX db $ do
                 user <- getUser name
                 liftSTM $ readTVar (posts user)
             json posts
@@ -71,13 +72,11 @@ main = do
             feed <- liftIO $ timeout (30 * 10^6) $ runTX db $ do
                 user <- getUser name
                 liftSTM $ waitForFeed user lastKnownTime
-            case feed of
-                Just posts -> json posts
-                Nothing -> status requestTimeout408
+            maybe (status requestTimeout408) json feed
 
         get "/users/:name/feed" $ do
             name <- param "name"
-            feed <- tx $ do
+            feed <- liftIO $ runTX db $ do
                 user <- getUser name
                 liftSTM $ feed user
             json feed
@@ -85,10 +84,12 @@ main = do
         post "/users/:name/posts" $ do
             name <- param "name"
             body <- param "body"
-            tx $ do
+            liftIO $ runTX db $ do
                 user <- getUser name
                 newPost user body
-            json ()
+            status noContent204
+
+------------------------------------------------------------------------------
 
 getAllUserNames :: TX BlogDB [Text]
 getAllUserNames = do
