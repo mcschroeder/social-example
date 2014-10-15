@@ -1,4 +1,6 @@
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
 
 module BlogDB where
@@ -11,6 +13,7 @@ import Data.List
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Ord
+import Data.SafeCopy
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
@@ -54,10 +57,6 @@ instance Durable BlogDB where
                           | NewPost Text UTCTime Text
                           | Follow Text Text
                           | Unfollow Text Text
-                          deriving (Show, Read)
-
-    encode = C.pack . show
-    decode = read . C.unpack
 
     replay (NewUser name) = void $ newUser name
 
@@ -140,3 +139,8 @@ unfollow user1 user2 = do
     liftSTM $ do
         modifyTVar (following user1) (Set.delete user2)
         modifyTVar (followers user2) (Set.delete user1)
+
+------------------------------------------------------------------------------
+
+-- TODO: maybe add Generic deriving to SafeCopy
+deriveSafeCopyIndexedType 1 'base ''Operation [''BlogDB]

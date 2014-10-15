@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -17,8 +18,9 @@ import Control.Exception
 import Control.Monad
 import Control.Monad.Trans.Class
 import Control.Monad.Trans.State.Strict
-import Data.ByteString.Char8 (ByteString)
-import qualified Data.ByteString.Char8 as C
+import qualified Data.ByteString as B
+import Data.SafeCopy
+import Data.Serialize (Result(..), runGetPartial, runPut)
 import GHC.Conc.Sync (unsafeIOToSTM)
 import System.IO
 
@@ -27,10 +29,8 @@ import System.IO
 newtype TX d a = TX (StateT (d, [Operation d]) STM a)
   deriving (Functor, Applicative, Monad)
 
-class Durable d where
+class SafeCopy (Operation d) => Durable d where
     data Operation d
-    encode :: Operation d -> ByteString
-    decode :: ByteString -> Operation d
     replay :: Operation d -> TX d ()
 
 record :: Durable d => Operation d -> TX d ()
@@ -72,11 +72,12 @@ data Database d = Database
 
 openDatabase :: Durable d => FilePath -> d -> IO (Database d)
 openDatabase fp userData = do
-    h <- openFile fp ReadWriteMode
-    hSetBuffering h LineBuffering
+    h <- openBinaryFile fp ReadWriteMode
+    hSetBuffering h NoBuffering
     fileHandle <- newMVar h
     let db = Database{..}
-    deserialize db
+    eof <- hIsEOF h
+    unless eof $ deserialize db
     return db
 
 closeDatabase :: Database d -> IO ()
@@ -84,15 +85,23 @@ closeDatabase db = withMVar (fileHandle db) hClose
 
 serialize :: Durable d => Database d -> [Operation d] -> IO ()
 serialize db ops =
-    withMVar (fileHandle db) (\h -> mapM_ (C.hPutStrLn h . encode) ops)
+    withMVar (fileHandle db)
+             (\h -> forM_ ops $ B.hPut h . runPut . safePut)
 
 deserialize :: Durable d => Database d -> IO ()
 deserialize db =
-    withMVar (fileHandle db) (hMapLines_ (runTX_ db . replay . decode))
+    withMVar (fileHandle db)
+             (hMapDecode_ $ runTX_ db . replay)
 
-hMapLines_ :: (ByteString -> IO ()) -> Handle -> IO ()
-hMapLines_ f h = do eof <- hIsEOF h
-                    unless eof $ do
-                        str <- C.hGetLine h
-                        f str
-                        hMapLines_ f h
+hMapDecode_ :: SafeCopy a => (a -> IO ()) -> Handle -> IO ()
+hMapDecode_ f h = do c <- nextChunk
+                     unless (B.null c) (go run c)
+  where
+    nextChunk = B.hGetSome h 1024
+    run = runGetPartial safeGet
+    go k c = case k c of
+        Fail    msg _ -> error msg
+        Partial k'    -> go k' =<< nextChunk
+        Done    u c'  -> f u >> if B.null c'
+                                    then hMapDecode_ f h
+                                    else go run c'

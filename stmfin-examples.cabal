@@ -21,10 +21,12 @@ executable blog1
   other-modules: BlogDB, TX
   build-depends: base ==4.7.*
                , aeson >=0.8
+               , cereal ==0.4.*
                , containers ==0.5.*
                , bytestring ==0.10.*
                , http-types ==0.8.*
                , old-locale ==1.0.*
+               , safecopy ==0.8.*
                , scotty ==0.9.*
                , stm >=2.4.3 && <2.5
                , text ==1.2.*
