@@ -8,8 +8,8 @@ import Control.Applicative
 import Control.Concurrent.STM
 import Control.Monad
 import Control.Monad.IO.Class
-import Data.Aeson (ToJSON, object, (.=))
-import qualified Data.Aeson as Aeson
+import Data.Aeson (ToJSON, toJSON, object, (.=))
+import qualified Data.Aeson.Types as Aeson
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import Data.Text (Text)
@@ -42,8 +42,8 @@ main = do
             jsonTX getAllUserNames
 
         put "/users" $ do
-            username <- param "name"
-            jsonTX $ userToJson =<< newUser username
+            name <- param "name"
+            jsonTX $ userToJson =<< newUser name
 
         get "/users/:name" $ do
             name <- param "name"
@@ -94,6 +94,14 @@ main = do
                 user <- getUser name
                 void $ newPost user body
 
+        post "/users/:name/reblogs" $ do
+            name <- param "name"
+            postId <- param "postId"
+            liftTX $ do
+                user <- getUser name
+                post <- getPost postId
+                void $ reblog user post
+
 ------------------------------------------------------------------------------
 
 getAllUserNames :: TX SocialDB [Text]
@@ -111,26 +119,24 @@ userToJson user = liftSTM $ do
                     ]
 
 postToJson :: Post -> TX SocialDB Aeson.Value
-postToJson post = liftSTM $ do
-    reblogIds <- map postId <$> readTVar (reblogs post)
+postToJson post = do
+    reblogIds <- liftSTM $ map postId <$> readTVar (reblogs post)
+    content <- contentToJson (body post)
     return $ object [ "postId" .= postId post
                     , "author" .= name (author post)
                     , "time" .= time post
-                    , case body post of
-                        Original text -> "original" .= text
-                        Reblogged post -> "reblogged" .= post
+                    , content
                     ]
 
-deriving instance ToJSON PostId
+contentToJson :: Content -> TX SocialDB Aeson.Pair
+contentToJson (Original  text) = return ("original" .= text)
+contentToJson (Reblogged post) = ("reblogged" .=) <$> postToJson post
 
-instance ToJSON Post where
-    toJSON post = object [ "postId" .= postId post
-                         , "author" .= name (author post)
-                         , "time" .= time post
-                         , case body post of
-                            Original  text -> "original" .= text
-                            Reblogged post -> "reblogged" .= post
-                         ]
+instance ToJSON PostId where
+    toJSON (PostId pid) = toJSON $ show pid
+
+instance Parsable PostId where
+    parseParam = fmap PostId . readEither
 
 instance Parsable UTCTime where
     parseParam = maybe (Left "no parse") Right
