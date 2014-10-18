@@ -6,7 +6,7 @@ import Control.Applicative
 import Control.Concurrent.STM
 import Control.Monad
 import Control.Monad.IO.Class
-import Data.Aeson (ToJSON, object, (.=))
+import Data.Aeson (ToJSON, toJSON, object, (.=))
 import qualified Data.Aeson as Aeson
 import qualified Data.Map as Map
 import qualified Data.Set as Set
@@ -63,11 +63,11 @@ main = do
                 user2 <- getUser name2
                 user1 `unfollow` user2
 
-        get "/users/:name/posts" $ do
+        get "/users/:name/wall" $ do
             name <- param "name"
             jsonTX $ do
                 user <- getUser name
-                liftSTM $ readTVar (posts user)
+                liftSTM $ readTVar (wall user)
 
         get "/users/:name/feed" $ do
             name <- param "name"
@@ -82,7 +82,7 @@ main = do
                 user <- getUser name
                 liftSTM $ feed user
 
-        post "/users/:name/posts" $ do
+        post "/users/:name/wall" $ do
             name <- param "name"
             body <- param "body"
             liftTX $ do
@@ -106,10 +106,17 @@ userToJson user = liftSTM $ do
                     ]
 
 instance ToJSON Post where
-    toJSON (Post author time body) = object [ "author" .= name author
-                                            , "time" .= time
-                                            , "body" .= body
-                                            ]
+    toJSON post = object [ "postId" .= postId post
+                         , "author" .= (name . author) post
+                         , "time" .= time post
+                         , "body" .= body post
+                         ]
+
+instance ToJSON PostId where
+    toJSON (PostId pid) = toJSON $ show pid
+
+instance Parsable PostId where
+    parseParam = fmap PostId . readEither
 
 instance Parsable UTCTime where
     parseParam = maybe (Left "no parse") Right

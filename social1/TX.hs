@@ -1,13 +1,13 @@
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE RecordWildCards #-}
+ {-# LANGUAGE FlexibleContexts #-}
+ {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+ {-# LANGUAGE TypeFamilies #-}
 
 module TX
-    ( TX, Durable(..)
+    ( TX, Database(..)
     , record, getData, liftSTM, throwTX, unsafeIOToTX
-    , runTX
-    , Database, openDatabase, closeDatabase
+    , DatabaseHandle, runTX
+    , Transient, newTransientDatabase
+    , LogFile, openDatabase, closeDatabase
     ) where
 
 import Control.Applicative
@@ -29,12 +29,12 @@ import System.IO
 newtype TX d a = TX (StateT (d, [Operation d]) STM a)
   deriving (Functor, Applicative, Monad)
 
-class SafeCopy (Operation d) => Durable d where
+class Database d where
     data Operation d
     replay :: Operation d -> TX d ()
 
-record :: Durable d => Operation d -> TX d ()
-record op = TX $ modify' (second (op:))
+record :: Operation d -> TX d ()
+record = TX . modify' . second . (:)
 
 getData :: TX d d
 getData = TX $ fst <$> get
@@ -50,14 +50,21 @@ unsafeIOToTX = liftSTM . unsafeIOToSTM
 
 ------------------------------------------------------------------------------
 
-runTX :: Durable d => Database d -> TX d a -> IO a
-runTX db (TX m) = atomicallyWithIO action finalizer
-  where
-    action = runStateT m (userData db, [])
-    finalizer (a, (_, ops)) = serialize db (reverse ops) >> return a
+data DatabaseHandle s d = DatabaseHandle
+    { database  :: d
+    , storage   :: s
+    , serialize :: [Operation d] -> IO ()
+    }
 
-runTX_ :: Database d -> TX d a -> IO ()
-runTX_ db (TX m) = void $ atomically $ runStateT m (userData db, [])
+runTX :: DatabaseHandle s d -> TX d a -> IO a
+runTX h (TX m) = atomicallyWithIO action finalizer
+  where
+    action = runStateT m (database h, [])
+    finalizer (a, (_, ops)) = do serialize h (reverse ops)
+                                 return a
+
+runTX_ :: d -> TX d a -> IO ()
+runTX_ d (TX m) = void $ atomically $ runStateT m (d, [])
 
 {-# WARNING atomicallyWithIO "unsupported; using unsafe simulation" #-}
 atomicallyWithIO :: STM a -> (a -> IO b) -> IO b
@@ -65,33 +72,47 @@ atomicallyWithIO stm io = atomically stm >>= io
 
 ------------------------------------------------------------------------------
 
-data Database d = Database
-    { userData :: d
-    , fileHandle :: MVar Handle
-    }
+data Transient = Transient
 
-openDatabase :: Durable d => FilePath -> d -> IO (Database d)
-openDatabase fp userData = do
+newTransientDatabase :: d -> IO (DatabaseHandle Transient d)
+newTransientDatabase d =
+    return DatabaseHandle { database = d
+                          , storage = Transient
+                          , serialize = const $ return ()
+                          }
+
+------------------------------------------------------------------------------
+
+data LogFile = LogFile { fileHandle :: MVar Handle }
+
+openDatabase :: (Database d, SafeCopy (Operation d))
+             => FilePath -> d -> IO (DatabaseHandle LogFile d)
+openDatabase fp d = do
+    fileHandle <- mkFileHandle fp
+    deserializeLog fileHandle d
+    return DatabaseHandle { database  = d
+                          , storage   = LogFile fileHandle
+                          , serialize = serializeLog fileHandle
+                          }
+
+closeDatabase :: DatabaseHandle LogFile d -> IO ()
+closeDatabase h = withMVar (fileHandle $ storage h) hClose
+
+mkFileHandle :: FilePath -> IO (MVar Handle)
+mkFileHandle fp = do
     h <- openBinaryFile fp ReadWriteMode
     hSetBuffering h NoBuffering
-    fileHandle <- newMVar h
-    let db = Database{..}
-    eof <- hIsEOF h
-    unless eof $ deserialize db
-    return db
+    newMVar h
 
-closeDatabase :: Database d -> IO ()
-closeDatabase db = withMVar (fileHandle db) hClose
+deserializeLog :: (Database d, SafeCopy (Operation d))
+            => MVar Handle -> d -> IO ()
+deserializeLog fileHandle d =
+    withMVar fileHandle (hMapDecode_ $ runTX_ d . replay)
 
-serialize :: Durable d => Database d -> [Operation d] -> IO ()
-serialize db ops =
-    withMVar (fileHandle db)
-             (\h -> forM_ ops $ B.hPut h . runPut . safePut)
-
-deserialize :: Durable d => Database d -> IO ()
-deserialize db =
-    withMVar (fileHandle db)
-             (hMapDecode_ $ runTX_ db . replay)
+serializeLog :: SafeCopy (Operation d)
+             => MVar Handle -> [Operation d] -> IO ()
+serializeLog fileHandle ops =
+    withMVar fileHandle (\h -> forM_ ops $ B.hPut h . runPut . safePut)
 
 hMapDecode_ :: SafeCopy a => (a -> IO ()) -> Handle -> IO ()
 hMapDecode_ f h = do c <- nextChunk

@@ -13,6 +13,7 @@ cabal-version:       >=1.10
 
 extra-source-files: js/*
                   , social1/client.html
+                  , social2/client.html
 
 executable social1
   hs-source-dirs: social1
@@ -25,6 +26,7 @@ executable social1
                , bytestring ==0.10.*
                , http-types ==0.8.*
                , old-locale ==1.0.*
+               , random ==1.1.*
                , safecopy ==0.8.*
                , scotty ==0.9.*
                , stm >=2.4.3 && <2.5

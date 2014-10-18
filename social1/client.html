@@ -60,7 +60,7 @@ function updateWall(name) {
 			pollFeed(name, posts[0] ? posts[0].time : "0000-00-00T00:00:00.0Z");
 		})
 	} else {
-		$.get(server + "/users/" + name + "/posts", function(posts) {
+		$.get(server + "/users/" + name + "/wall", function(posts) {
 			$("#wall").html($.map(posts, renderPost));
 		})
 	}
@@ -144,7 +144,7 @@ function unfollow(name) {
 
 function post(body) {
 	var visitor = $.cookie("user");
-	$.ajax(server + "/users/" + visitor + "/posts", {
+	$.ajax(server + "/users/" + visitor + "/wall", {
 		type: "post",
 		data: {"body": body},
 		success: function() {
