@@ -72,7 +72,7 @@ emptySocialDB = do
 
 ------------------------------------------------------------------------------
 
-instance Durable SocialDB where
+instance Database SocialDB where
     data Operation SocialDB = NewUser Text
                             | NewPost PostId Text UTCTime Text
                             | Reblog PostId Text UTCTime PostId
@@ -206,6 +206,16 @@ deriveSafeCopy 1 'base ''PostId
 
 -- TODO: we need to be able to migrate within a TX environment
 -- so that we can create new unique ids for posts
+
+-- The problem is: they have to be unique but also deterministic
+-- even if we could migrate within the TX monad, we couldn't do that
+-- only if we were to transcode the database files on-disk instead of on-the-fly
+
+-- also, think about snapshotting. we would need a migrations tory there too
+-- (which woudl be more complicated, I think)
+
+-- or maybe leave the whole migration thing as an aside
+-- and focus on the ctrie stuff?
 
 data Operation_SocialDB_v0 = NewUser_v0 Text
                            | NewPost_v0 Text UTCTime Text
