@@ -1,4 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module Server where
 
@@ -7,7 +9,7 @@ import Control.Concurrent.STM
 import Control.Monad
 import Control.Monad.IO.Class
 import Data.Aeson (ToJSON, toJSON, object, (.=))
-import qualified Data.Aeson as Aeson
+import qualified Data.Aeson.Types as Aeson
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import Data.Text (Text)
@@ -63,12 +65,12 @@ main = do
                 user2 <- getUser name2
                 user1 `unfollow` user2
 
-        get "/users/:name/timeline" $ do
+        get "/users/:name/posts" $ do
             name <- param "name"
             jsonTX $ do
                 user <- getUser name
-                timeline <- liftSTM $ readTVar (timeline user)
-                mapM postToJson timeline
+                posts <- liftSTM $ readTVar (posts user)
+                mapM postToJson posts
 
         get "/users/:name/feed" $ do
             name <- param "name"
@@ -85,30 +87,20 @@ main = do
                 feed <- liftSTM $ feed user
                 mapM postToJson feed
 
-        post "/users/:name/timeline" $ do
+        post "/users/:name/posts" $ do
             name <- param "name"
             body <- param "body"
-            authorName <- param "author"
             liftTX $ do
-                author <- getUser authorName
-                target <- getUser name
-                void $ newPost author body target
+                user <- getUser name
+                void $ newPost user body
 
-        put "/posts/:postId/likes" $ do
-            postId <- param "postId"
+        post "/users/:name/reblogs" $ do
             name <- param "name"
+            postId <- param "postId"
             liftTX $ do
                 user <- getUser name
                 post <- getPost postId
-                user `like` post
-
-        delete "/posts/:postId/likes" $ do
-            postId <- param "postId"
-            name <- param "name"
-            liftTX $ do
-                user <- getUser name
-                post <- getPost postId
-                user `unlike` post
+                void $ reblog user post
 
 ------------------------------------------------------------------------------
 
@@ -127,15 +119,18 @@ userToJson user = liftSTM $ do
                     ]
 
 postToJson :: Post -> TX SocialDB Aeson.Value
-postToJson post = liftSTM $ do
-    likes <- Set.toList <$> readTVar (likes post)
+postToJson post = do
+    reblogIds <- liftSTM $ map postId <$> readTVar (reblogs post)
+    content <- contentToJson (body post)
     return $ object [ "postId" .= postId post
-                    , "author" .= (name . author) post
-                    , "target" .= (name . target) post
+                    , "author" .= name (author post)
                     , "time" .= time post
-                    , "body" .= body post
-                    , "likes" .= map name likes
+                    , content
                     ]
+
+contentToJson :: Content -> TX SocialDB Aeson.Pair
+contentToJson (Original  text) = return ("original" .= text)
+contentToJson (Reblogged post) = ("reblogged" .=) <$> postToJson post
 
 instance ToJSON PostId where
     toJSON (PostId pid) = toJSON $ show pid

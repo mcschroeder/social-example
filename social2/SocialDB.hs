@@ -5,12 +5,13 @@
 {-# LANGUAGE TypeFamilies #-}
 
 module SocialDB
-    ( SocialDB(..), User(..), Post(..), Content(..), PostId(..)
+    ( SocialDB(..), User(..), Post(..), PostId(..)
     , emptySocialDB
     , feed, waitForFeed
     , newUser, getUser
-    , newPost, getPost, reblog
+    , newPost, getPost
     , follow, unfollow
+    , like, unlike
     ) where
 
 import Control.Applicative
@@ -33,27 +34,25 @@ import TX
 ------------------------------------------------------------------------------
 
 data SocialDB = SocialDB
-    { users    :: TVar (Map Text User)
-    , allPosts :: TVar (Map PostId Post)
+    { users :: TVar (Map Text User)
+    , posts :: TVar (Map PostId Post)
     }
 
 data User = User
     { name      :: Text
-    , posts     :: TVar [Post]
+    , timeline  :: TVar [Post]
     , following :: TVar (Set User)
     , followers :: TVar (Set User)
     }
 
 data Post = Post
-    { postId  :: PostId
-    , author  :: User
-    , time    :: UTCTime
-    , body    :: Content
-    , reblogs :: TVar [Post]
+    { postId :: PostId
+    , author :: User
+    , time   :: UTCTime
+    , body   :: Text
+    , target :: User
+    , likes  :: TVar (Set User)
     }
-
-data Content = Original Text
-             | Reblogged Post
 
 newtype PostId = PostId Word64
     deriving (Eq, Ord, Random, Show)
@@ -64,50 +63,60 @@ instance Eq User where
 instance Ord User where
     compare = comparing name
 
+instance Eq Post where
+    p1 == p2 = postId p1 == postId p2
+
 emptySocialDB :: IO SocialDB
 emptySocialDB = do
     users <- newTVarIO Map.empty
-    allPosts <- newTVarIO Map.empty
+    posts <- newTVarIO Map.empty
     return SocialDB{..}
 
 ------------------------------------------------------------------------------
 
 instance Database SocialDB where
     data Operation SocialDB = NewUser Text
-                            | NewPost PostId Text UTCTime Text
-                            | Reblog PostId Text UTCTime PostId
+                            | NewPost PostId Text UTCTime Text Text
                             | Follow Text Text
                             | Unfollow Text Text
+                            | Like Text PostId
+                            | Unlike Text PostId
 
     replay (NewUser name) = void $ newUser name
 
-    replay (NewPost postId name time body) = do
-        author <- getUser name
-        void $ newPost_ postId author time body
-
-    replay (Reblog postId name time postId2) = do
-        author <- getUser name
-        post2 <- getPost postId2
-        void $ reblog_ postId author time post2
+    replay (NewPost postId authorName time body targetName) = do
+        author <- getUser authorName
+        target <- getUser targetName
+        void $ newPost_ postId author time body target
 
     replay (Follow name1 name2) = do
         user1 <- getUser name1
         user2 <- getUser name2
-        follow user1 user2
+        user1 `follow` user2
 
     replay (Unfollow name1 name2) = do
         user1 <- getUser name1
         user2 <- getUser name2
-        unfollow user1 user2
+        user1 `unfollow` user2
+
+    replay (Like name postId) = do
+        user <- getUser name
+        post <- getPost postId
+        user `like` post
+
+    replay (Unlike name postId) = do
+        user <- getUser name
+        post <- getPost postId
+        user `unlike` post
 
 ------------------------------------------------------------------------------
 
 feed :: User -> STM [Post]
 feed user = do
-    myPosts <- readTVar (posts user)
+    myPosts <- readTVar (timeline user)
     others <- Set.toList <$> readTVar (following user)
-    otherPosts <- concat <$> mapM (readTVar . posts) others
-    return $ sortBy (flip $ comparing time) (myPosts ++ otherPosts)
+    otherPosts <- concat <$> mapM (readTVar . timeline) others
+    return $ nub $ sortBy (flip $ comparing time) (myPosts ++ otherPosts)
 
 waitForFeed :: User -> UTCTime -> STM [Post]
 waitForFeed user lastSeen = do
@@ -124,7 +133,7 @@ newUser name = do
         usermap <- readTVar (users db)
         unless (Map.notMember name usermap)
                (error $ "user already exists: " ++ show name)
-        posts <- newTVar []
+        timeline <- newTVar []
         followers <- newTVar Set.empty
         following <- newTVar Set.empty
         let user = User{..}
@@ -139,46 +148,32 @@ getUser name = do
         Just user -> return user
         Nothing -> error $ "user not found: " ++ show name
 
-newPost :: User -> Text -> TX SocialDB Post
-newPost author body = do
-    time <- unsafeIOToTX getCurrentTime
+newPost :: User -> Text -> User -> TX SocialDB Post
+newPost author body target = do
     postId <- unsafeIOToTX randomIO
-    newPost_ postId author time body
-
-newPost_ :: PostId -> User -> UTCTime -> Text -> TX SocialDB Post
-newPost_ postId author time text = do
     db <- getData
-    record $ NewPost postId (name author) time text
-    createPost postId author time (Original text)
-
-reblog :: User -> Post -> TX SocialDB Post
-reblog author originalPost = do
-    time <- unsafeIOToTX getCurrentTime
-    postId <- unsafeIOToTX randomIO
-    reblog_ postId author time originalPost
-
-reblog_ :: PostId -> User -> UTCTime -> Post -> TX SocialDB Post
-reblog_ pid author time originalPost = do
-    db <- getData
-    record $ Reblog pid (name author) time (postId originalPost)
-    post <- createPost pid author time (Reblogged originalPost)
-    liftSTM $ modifyTVar (reblogs originalPost) (post:)
-    return post
-
-createPost :: PostId -> User -> UTCTime -> Content -> TX SocialDB Post
-createPost postId author time body = do
-    db <- getData
-    reblogs <- liftSTM $ newTVar []
-    let post = Post{..}
     liftSTM $ do
-        modifyTVar (posts author) (post:)
-        modifyTVar (allPosts db) (Map.insert postId post)
-    return post
+        posts <- readTVar (posts db)
+        check (Map.notMember postId posts)
+    time <- unsafeIOToTX getCurrentTime
+    newPost_ postId author time body target
+
+newPost_ :: PostId -> User -> UTCTime -> Text -> User -> TX SocialDB Post
+newPost_ postId author time body target = do
+    record $ NewPost postId (name author) time body (name target)
+    db <- getData
+    liftSTM $ do
+        likes <- newTVar Set.empty
+        let post = Post{..}
+        modifyTVar (timeline author) (post:)
+        unless (target == author) $ modifyTVar (timeline target) (post:)
+        modifyTVar (posts db) (Map.insert postId post)
+        return post
 
 getPost :: PostId -> TX SocialDB Post
 getPost postId = do
     db <- getData
-    postmap <- liftSTM $ readTVar (allPosts db)
+    postmap <- liftSTM $ readTVar (posts db)
     case Map.lookup postId postmap of
         Just post -> return post
         Nothing -> error $ "post not found: " ++ show postId
@@ -197,36 +192,34 @@ unfollow user1 user2 = do
         modifyTVar (following user1) (Set.delete user2)
         modifyTVar (followers user2) (Set.delete user1)
 
+like :: User -> Post -> TX SocialDB ()
+like user post = do
+    record $ Like (name user) (postId post)
+    liftSTM $ modifyTVar (likes post) (Set.insert user)
+
+unlike :: User -> Post -> TX SocialDB ()
+unlike user post = do
+    record $ Unlike (name user) (postId post)
+    liftSTM $ modifyTVar (likes post) (Set.delete user)
+
 ------------------------------------------------------------------------------
 
-deriveSafeCopyIndexedType 2 'extension ''Operation [''SocialDB]
 deriveSafeCopy 1 'base ''PostId
+deriveSafeCopyIndexedType 2 'extension ''Operation [''SocialDB]
 
 ------------------------------------------------------------------------------
-
--- TODO: we need to be able to migrate within a TX environment
--- so that we can create new unique ids for posts
-
--- The problem is: they have to be unique but also deterministic
--- even if we could migrate within the TX monad, we couldn't do that
--- only if we were to transcode the database files on-disk instead of on-the-fly
-
--- also, think about snapshotting. we would need a migrations tory there too
--- (which woudl be more complicated, I think)
-
--- or maybe leave the whole migration thing as an aside
--- and focus on the ctrie stuff?
 
 data Operation_SocialDB_v0 = NewUser_v0 Text
-                           | NewPost_v0 Text UTCTime Text
+                           | NewPost_v0 PostId Text UTCTime Text
                            | Follow_v0 Text Text
                            | Unfollow_v0 Text Text
-
-deriveSafeCopy 1 'base ''Operation_SocialDB_v0
 
 instance Migrate (Operation SocialDB) where
     type MigrateFrom (Operation SocialDB) = Operation_SocialDB_v0
     migrate (NewUser_v0 name) = NewUser name
-    migrate (NewPost_v0 name time body) = NewPost (PostId 0) name time body
+    migrate (NewPost_v0 postId authorName time body) =
+        NewPost postId authorName time body authorName
     migrate (Follow_v0 name1 name2) = Follow name1 name2
-    migrate (Unfollow_v0 name1 name2) = Unfollow name1 name2
+    migrate (Unfollow_v0 name1 name2) = Unfollow name2 name2
+
+deriveSafeCopy 1 'base ''Operation_SocialDB_v0

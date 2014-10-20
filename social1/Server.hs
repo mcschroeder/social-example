@@ -63,11 +63,11 @@ main = do
                 user2 <- getUser name2
                 user1 `unfollow` user2
 
-        get "/users/:name/wall" $ do
+        get "/users/:name/timeline" $ do
             name <- param "name"
             jsonTX $ do
                 user <- getUser name
-                liftSTM $ readTVar (wall user)
+                liftSTM $ readTVar (timeline user)
 
         get "/users/:name/feed" $ do
             name <- param "name"
@@ -82,7 +82,7 @@ main = do
                 user <- getUser name
                 liftSTM $ feed user
 
-        post "/users/:name/wall" $ do
+        post "/users/:name/timeline" $ do
             name <- param "name"
             body <- param "body"
             liftTX $ do
