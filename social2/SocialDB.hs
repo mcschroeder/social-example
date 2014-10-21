@@ -148,13 +148,18 @@ getUser name = do
         Just user -> return user
         Nothing -> error $ "user not found: " ++ show name
 
-newPost :: User -> Text -> User -> TX SocialDB Post
-newPost author body target = do
+newUniquePostId :: TX SocialDB PostId
+newUniquePostId = do
     postId <- unsafeIOToTX randomIO
     db <- getData
     liftSTM $ do
         posts <- readTVar (posts db)
         check (Map.notMember postId posts)
+    return postId
+
+newPost :: User -> Text -> User -> TX SocialDB Post
+newPost author body target = do
+    postId <- newUniquePostId
     time <- unsafeIOToTX getCurrentTime
     newPost_ postId author time body target
 
