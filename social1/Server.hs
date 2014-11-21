@@ -26,7 +26,7 @@ import TX.LogFile
 
 main :: IO ()
 main = do
-    db <- openDatabase "blog" =<< emptySocialDB
+    db <- openDatabase "social.db" =<< emptySocialDB
 
     let liftTX   = liftIO . runTX db
         jsonTX x = json =<< liftTX x
