@@ -40,11 +40,11 @@ class Database d where
 record :: Operation d -> TX d ()
 record op = TX $ \_ -> return ((), [op])
 
-getData :: TX d d
-getData = TX $ \d -> return (d, [])
-
 liftSTM :: STM a -> TX d a
 liftSTM m = TX $ \_ -> m >>= \a -> return (a, [])
+
+getData :: TX d d
+getData = TX $ \d -> return (d, [])
 
 throwTX :: Exception e => e -> TX d a
 throwTX = liftSTM . throwSTM
