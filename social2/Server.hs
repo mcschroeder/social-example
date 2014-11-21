@@ -20,6 +20,7 @@ import Web.Scotty hiding (body)
 
 import SocialDB
 import TX
+import TX.LogFile
 
 ------------------------------------------------------------------------------
 
