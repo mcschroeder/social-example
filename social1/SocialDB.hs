@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -15,6 +16,7 @@ module SocialDB
 
 import Control.Applicative
 import Control.Concurrent.STM
+import Control.Exception
 import Control.Monad
 import Data.List
 import Data.Map (Map)
@@ -25,6 +27,7 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import Data.Time
+import Data.Typeable
 import Data.Word
 import System.Random
 
@@ -92,6 +95,14 @@ instance Database SocialDB where
 
 ------------------------------------------------------------------------------
 
+data SocialException = UserNotFound Text
+                     | UserAlreadyExists Text
+                     deriving (Show, Typeable)
+
+instance Exception SocialException
+
+------------------------------------------------------------------------------
+
 feed :: User -> STM [Post]
 feed user = do
     myPosts <- readTVar (timeline user)
@@ -113,7 +124,7 @@ newUser name = do
     liftSTM $ do
         usermap <- readTVar (users db)
         unless (Map.notMember name usermap)
-               (error $ "user already exists: " ++ show name)
+               (throwSTM $ UserAlreadyExists name)
         timeline <- newTVar []
         followers <- newTVar Set.empty
         following <- newTVar Set.empty
@@ -127,7 +138,7 @@ getUser name = do
     usermap <- liftSTM $ readTVar (users db)
     case Map.lookup name usermap of
         Just user -> return user
-        Nothing -> error $ "user not found: " ++ show name
+        Nothing   -> throwTX (UserNotFound name)
 
 newUniquePostId :: TX SocialDB PostId
 newUniquePostId = do

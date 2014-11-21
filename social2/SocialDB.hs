@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -16,6 +17,7 @@ module SocialDB
 
 import Control.Applicative
 import Control.Concurrent.STM
+import Control.Exception
 import Control.Monad
 import Data.List
 import Data.Map (Map)
@@ -26,6 +28,7 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import Data.Time
+import Data.Typeable
 import Data.Word
 import System.Random
 
@@ -111,6 +114,15 @@ instance Database SocialDB where
 
 ------------------------------------------------------------------------------
 
+data SocialException = UserNotFound Text
+                     | UserAlreadyExists Text
+                     | PostNotFound PostId
+                     deriving (Show, Typeable)
+
+instance Exception SocialException
+
+------------------------------------------------------------------------------
+
 feed :: User -> STM [Post]
 feed user = do
     myPosts <- readTVar (timeline user)
@@ -132,7 +144,7 @@ newUser name = do
     liftSTM $ do
         usermap <- readTVar (users db)
         unless (Map.notMember name usermap)
-               (error $ "user already exists: " ++ show name)
+               (throwSTM $ UserAlreadyExists name)
         timeline <- newTVar []
         followers <- newTVar Set.empty
         following <- newTVar Set.empty
@@ -146,7 +158,7 @@ getUser name = do
     usermap <- liftSTM $ readTVar (users db)
     case Map.lookup name usermap of
         Just user -> return user
-        Nothing -> error $ "user not found: " ++ show name
+        Nothing   -> throwTX (UserNotFound name)
 
 newUniquePostId :: TX SocialDB PostId
 newUniquePostId = do
@@ -181,7 +193,7 @@ getPost postId = do
     postmap <- liftSTM $ readTVar (posts db)
     case Map.lookup postId postmap of
         Just post -> return post
-        Nothing -> error $ "post not found: " ++ show postId
+        Nothing   -> throwTX (PostNotFound postId)
 
 follow :: User -> User -> TX SocialDB ()
 follow user1 user2 = do
