@@ -36,12 +36,12 @@ import TX
 ------------------------------------------------------------------------------
 
 data SocialDB = SocialDB
-    { users :: TVar (Map Text User)
+    { users :: TVar (Map UserName User)
     , posts :: TVar (Map PostId Post)
     }
 
 data User = User
-    { name      :: Text
+    { name      :: UserName
     , timeline  :: TVar [Post]
     , following :: TVar (Set User)
     , followers :: TVar (Set User)
@@ -53,6 +53,8 @@ data Post = Post
     , time   :: UTCTime
     , body   :: Text
     }
+
+type UserName = Text
 
 newtype PostId = PostId Word64
     deriving (Eq, Ord, Random, Show)
@@ -72,10 +74,10 @@ emptySocialDB = do
 ------------------------------------------------------------------------------
 
 instance Database SocialDB where
-    data Operation SocialDB = NewUser Text
-                            | NewPost PostId Text UTCTime Text
-                            | Follow Text Text
-                            | Unfollow Text Text
+    data Operation SocialDB = NewUser UserName
+                            | NewPost PostId UserName UTCTime Text
+                            | Follow UserName UserName
+                            | Unfollow UserName UserName
 
     replay (NewUser name) = void $ newUser name
 
@@ -95,8 +97,8 @@ instance Database SocialDB where
 
 ------------------------------------------------------------------------------
 
-data SocialException = UserNotFound Text
-                     | UserAlreadyExists Text
+data SocialException = UserNotFound UserName
+                     | UserAlreadyExists UserName
                      deriving (Show, Typeable)
 
 instance Exception SocialException
@@ -117,7 +119,7 @@ waitForFeed user lastSeen = do
   where
     isNew post = diffUTCTime (time post) lastSeen > 0.1
 
-newUser :: Text -> TX SocialDB User
+newUser :: UserName -> TX SocialDB User
 newUser name = do
     db <- getData
     record $ NewUser name
@@ -132,7 +134,7 @@ newUser name = do
         modifyTVar (users db) (Map.insert name user)
         return user
 
-getUser :: Text -> TX SocialDB User
+getUser :: UserName -> TX SocialDB User
 getUser name = do
     db <- getData
     usermap <- liftSTM $ readTVar (users db)

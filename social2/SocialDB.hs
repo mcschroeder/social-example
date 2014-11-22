@@ -37,12 +37,12 @@ import TX
 ------------------------------------------------------------------------------
 
 data SocialDB = SocialDB
-    { users :: TVar (Map Text User)
+    { users :: TVar (Map UserName User)
     , posts :: TVar (Map PostId Post)
     }
 
 data User = User
-    { name      :: Text
+    { name      :: UserName
     , timeline  :: TVar [Post]
     , following :: TVar (Set User)
     , followers :: TVar (Set User)
@@ -56,6 +56,8 @@ data Post = Post
     , target :: User
     , likes  :: TVar (Set User)
     }
+
+type UserName = Text
 
 newtype PostId = PostId Word64
     deriving (Eq, Ord, Random, Show)
@@ -78,12 +80,12 @@ emptySocialDB = do
 ------------------------------------------------------------------------------
 
 instance Database SocialDB where
-    data Operation SocialDB = NewUser Text
-                            | NewPost PostId Text UTCTime Text Text
-                            | Follow Text Text
-                            | Unfollow Text Text
-                            | Like Text PostId
-                            | Unlike Text PostId
+    data Operation SocialDB = NewUser UserName
+                            | NewPost PostId UserName UTCTime Text UserName
+                            | Follow UserName UserName
+                            | Unfollow UserName UserName
+                            | Like UserName PostId
+                            | Unlike UserName PostId
 
     replay (NewUser name) = void $ newUser name
 
@@ -114,8 +116,8 @@ instance Database SocialDB where
 
 ------------------------------------------------------------------------------
 
-data SocialException = UserNotFound Text
-                     | UserAlreadyExists Text
+data SocialException = UserNotFound UserName
+                     | UserAlreadyExists UserName
                      | PostNotFound PostId
                      deriving (Show, Typeable)
 
@@ -137,7 +139,7 @@ waitForFeed user lastSeen = do
   where
     isNew post = diffUTCTime (time post) lastSeen > 0.1
 
-newUser :: Text -> TX SocialDB User
+newUser :: UserName -> TX SocialDB User
 newUser name = do
     db <- getData
     record $ NewUser name
@@ -152,7 +154,7 @@ newUser name = do
         modifyTVar (users db) (Map.insert name user)
         return user
 
-getUser :: Text -> TX SocialDB User
+getUser :: UserName -> TX SocialDB User
 getUser name = do
     db <- getData
     usermap <- liftSTM $ readTVar (users db)
@@ -226,10 +228,10 @@ deriveSafeCopyIndexedType 2 'extension ''Operation [''SocialDB]
 
 ------------------------------------------------------------------------------
 
-data Operation_SocialDB_v0 = NewUser_v0 Text
-                           | NewPost_v0 PostId Text UTCTime Text
-                           | Follow_v0 Text Text
-                           | Unfollow_v0 Text Text
+data Operation_SocialDB_v0 = NewUser_v0 UserName
+                           | NewPost_v0 PostId UserName UTCTime Text
+                           | Follow_v0 UserName UserName
+                           | Unfollow_v0 UserName UserName
 
 instance Migrate (Operation SocialDB) where
     type MigrateFrom (Operation SocialDB) = Operation_SocialDB_v0
