@@ -20,7 +20,6 @@ import Web.Scotty hiding (body)
 
 import SocialDB
 import TX
-import TX.LogFile
 
 ------------------------------------------------------------------------------
 
@@ -28,11 +27,11 @@ main :: IO ()
 main = do
     db <- openDatabase "social.db" =<< emptySocialDB
 
-    let liftTX   = liftIO . runTX db
+    let liftTX   = liftIO . durably db
         jsonTX x = json =<< liftTX x
 
     let jsonTimeoutTX t x = do
-            res <- liftIO $ timeout t $ runTX db x
+            res <- liftIO $ timeout t $ durably db x
             maybe (status requestTimeout408) json res
 
     scotty 3000 $ do
@@ -42,7 +41,7 @@ main = do
 
         put "/users" $ do
             name <- param "name"
-            jsonTX $ userToJson =<< newUser name
+            jsonTX $ userToJson =<< createUser name
 
         get "/users/:name" $ do
             name <- param "name"
@@ -93,7 +92,7 @@ main = do
             liftTX $ do
                 author <- getUser authorName
                 target <- getUser name
-                void $ newPost author body target
+                void $ createPost author body target
 
         put "/posts/:postId/likes" $ do
             postId <- param "postId"

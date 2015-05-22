@@ -19,85 +19,82 @@ import System.Timeout
 import Web.Scotty hiding (body)
 
 import SocialDB
-import TX
 
 ------------------------------------------------------------------------------
 
 main :: IO ()
 main = do
-    db <- openDatabase "social.db" =<< emptySocialDB
+    db <- emptySocialDB
 
-    let liftTX   = liftIO . durably db
-        jsonTX x = json =<< liftTX x
+    let liftSTM   = liftIO . atomically
+        jsonSTM x = json =<< liftSTM x
 
-    let jsonTimeoutTX t x = do
-            res <- liftIO $ timeout t $ durably db x
+    let jsonTimeoutSTM t x = do
+            res <- liftIO $ timeout t $ atomically x
             maybe (status requestTimeout408) json res
 
     scotty 3000 $ do
 
         get "/users" $ do
-            jsonTX getAllUserNames
+            jsonSTM $ getAllUserNames db
 
         put "/users" $ do
             name <- param "name"
-            jsonTX $ userToJson =<< createUser name
+            jsonSTM $ userToJson =<< createUser name db
 
         get "/users/:name" $ do
             name <- param "name"
-            jsonTX $ userToJson =<< getUser name
+            jsonSTM $ userToJson =<< getUser name db
 
         put "/users/:name1/following" $ do
             name1 <- param "name1"
             name2 <- param "name"
-            liftTX $ do
-                user1 <- getUser name1
-                user2 <- getUser name2
+            liftSTM $ do
+                user1 <- getUser name1 db
+                user2 <- getUser name2 db
                 user1 `follow` user2
 
         delete "/users/:name1/following" $ do
             name1 <- param "name1"
             name2 <- param "name"
-            liftTX $ do
-                user1 <- getUser name1
-                user2 <- getUser name2
+            liftSTM $ do
+                user1 <- getUser name1 db
+                user2 <- getUser name2 db
                 user1 `unfollow` user2
 
         get "/users/:name/timeline" $ do
             name <- param "name"
-            jsonTX $ do
-                user <- getUser name
-                liftSTM $ readTVar (timeline user)
+            jsonSTM $ do
+                user <- getUser name db
+                readTVar (timeline user)
 
         get "/users/:name/feed" $ do
             name <- param "name"
             lastKnownTime <- param "lastKnownTime" `rescue` const next
-            jsonTimeoutTX (30 * 10^6) $ do
-                user <- getUser name
-                liftSTM $ waitForFeed user lastKnownTime
+            jsonTimeoutSTM (30 * 10^6) $ do
+                user <- getUser name db
+                waitForFeed user lastKnownTime
 
         get "/users/:name/feed" $ do
             name <- param "name"
-            jsonTX $ do
-                user <- getUser name
-                liftSTM $ feed user
+            jsonSTM $ do
+                user <- getUser name db
+                feed user
 
         post "/users/:name/timeline" $ do
             name <- param "name"
             body <- param "body"
-            liftTX $ do
-                user <- getUser name
-                void $ createPost user body
+            liftSTM $ do
+                user <- getUser name db
+                void $ createPost user body db
 
 ------------------------------------------------------------------------------
 
-getAllUserNames :: TX SocialDB [Text]
-getAllUserNames = do
-    db <- getData
-    liftSTM $ map fst . Map.toList <$> readTVar (users db)
+getAllUserNames :: SocialDB -> STM [Text]
+getAllUserNames db = map fst . Map.toList <$> readTVar (users db)
 
-userToJson :: User -> TX SocialDB Aeson.Value
-userToJson user = liftSTM $ do
+userToJson :: User -> STM Aeson.Value
+userToJson user = do
     followers <- Set.toList <$> readTVar (followers user)
     following <- Set.toList <$> readTVar (following user)
     return $ object [ "name" .= name user

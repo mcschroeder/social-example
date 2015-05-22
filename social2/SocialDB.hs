@@ -9,8 +9,8 @@ module SocialDB
     ( SocialDB(..), User(..), Post(..), PostId(..)
     , emptySocialDB
     , feed, waitForFeed
-    , newUser, getUser
-    , newPost, getPost
+    , createUser, getUser
+    , createPost, getPost
     , follow, unfollow
     , like, unlike
     ) where
@@ -30,6 +30,7 @@ import Data.Text (Text)
 import Data.Time
 import Data.Typeable
 import Data.Word
+import GHC.Conc.Sync (unsafeIOToSTM)
 import System.Random
 
 import TX
@@ -41,12 +42,17 @@ data SocialDB = SocialDB
     , posts :: TVar (Map PostId Post)
     }
 
+type UserName = Text
+
 data User = User
     { name      :: UserName
     , timeline  :: TVar [Post]
     , following :: TVar (Set User)
     , followers :: TVar (Set User)
     }
+
+newtype PostId = PostId Word64
+    deriving (Eq, Ord, Random, Show)
 
 data Post = Post
     { postId :: PostId
@@ -56,11 +62,6 @@ data Post = Post
     , target :: User
     , likes  :: TVar (Set User)
     }
-
-type UserName = Text
-
-newtype PostId = PostId Word64
-    deriving (Eq, Ord, Random, Show)
 
 instance Eq User where
     u1 == u2 = name u1 == name u2
@@ -87,12 +88,13 @@ instance Database SocialDB where
                             | Like UserName PostId
                             | Unlike UserName PostId
 
-    replay (NewUser name) = void $ newUser name
+    replay (NewUser name) = void $ createUser name
 
     replay (NewPost postId authorName time body targetName) = do
+        db <- getData
         author <- getUser authorName
         target <- getUser targetName
-        void $ newPost_ postId author time body target
+        liftSTM $ void $ newPost postId author time body target db
 
     replay (Follow name1 name2) = do
         user1 <- getUser name1
@@ -139,8 +141,8 @@ waitForFeed user lastSeen = do
   where
     isNew post = diffUTCTime (time post) lastSeen > 0.1
 
-newUser :: UserName -> TX SocialDB User
-newUser name = do
+createUser :: UserName -> TX SocialDB User
+createUser name = do
     db <- getData
     record $ NewUser name
     liftSTM $ do
@@ -162,32 +164,29 @@ getUser name = do
         Just user -> return user
         Nothing   -> throwTX (UserNotFound name)
 
-newUniquePostId :: TX SocialDB PostId
-newUniquePostId = do
-    postId <- unsafeIOToTX randomIO
+createPost :: User -> Text -> User -> TX SocialDB Post
+createPost author body target = do
     db <- getData
-    liftSTM $ do
-        posts <- readTVar (posts db)
-        check (Map.notMember postId posts)
+    postId <- liftSTM $ newUniquePostId db
+    time <- unsafeIOToTX getCurrentTime
+    record $ NewPost postId (name author) time body (name target)
+    liftSTM $ newPost postId author time body target db
+
+newUniquePostId :: SocialDB -> STM PostId
+newUniquePostId db = do
+    postId <- unsafeIOToSTM randomIO
+    posts <- readTVar (posts db)
+    check (Map.notMember postId posts)
     return postId
 
-newPost :: User -> Text -> User -> TX SocialDB Post
-newPost author body target = do
-    postId <- newUniquePostId
-    time <- unsafeIOToTX getCurrentTime
-    newPost_ postId author time body target
-
-newPost_ :: PostId -> User -> UTCTime -> Text -> User -> TX SocialDB Post
-newPost_ postId author time body target = do
-    record $ NewPost postId (name author) time body (name target)
-    db <- getData
-    liftSTM $ do
-        likes <- newTVar Set.empty
-        let post = Post{..}
-        modifyTVar (timeline author) (post:)
-        unless (target == author) $ modifyTVar (timeline target) (post:)
-        modifyTVar (posts db) (Map.insert postId post)
-        return post
+newPost :: PostId -> User -> UTCTime -> Text -> User -> SocialDB -> STM Post
+newPost postId author time body target db = do
+    likes <- newTVar Set.empty
+    let post = Post{..}
+    modifyTVar (timeline author) (post:)
+    unless (target == author) $ modifyTVar (timeline target) (post:)
+    modifyTVar (posts db) (Map.insert postId post)
+    return post
 
 getPost :: PostId -> TX SocialDB Post
 getPost postId = do

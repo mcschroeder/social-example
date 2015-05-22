@@ -32,8 +32,6 @@ import Data.Word
 import GHC.Conc.Sync (unsafeIOToSTM)
 import System.Random
 
-import TX
-
 ------------------------------------------------------------------------------
 
 data SocialDB = SocialDB
@@ -74,31 +72,6 @@ emptySocialDB = do
 
 ------------------------------------------------------------------------------
 
-instance Database SocialDB where
-    data Operation SocialDB = NewUser UserName
-                            | NewPost PostId UserName UTCTime Text
-                            | Follow UserName UserName
-                            | Unfollow UserName UserName
-
-    replay (NewUser name) = void $ createUser name
-
-    replay (NewPost postId name time body) = do
-        db <- getData
-        author <- getUser name
-        liftSTM $ void $ newPost postId author time body db
-
-    replay (Follow name1 name2) = do
-        user1 <- getUser name1
-        user2 <- getUser name2
-        user1 `follow` user2
-
-    replay (Unfollow name1 name2) = do
-        user1 <- getUser name1
-        user2 <- getUser name2
-        user1 `unfollow` user2
-
-------------------------------------------------------------------------------
-
 data SocialException = UserNotFound UserName
                      | UserAlreadyExists UserName
                      deriving (Show, Typeable)
@@ -121,36 +94,30 @@ waitForFeed user lastSeen = do
   where
     isNew post = diffUTCTime (time post) lastSeen > 0.1
 
-createUser :: UserName -> TX SocialDB User
-createUser name = do
-    db <- getData
-    record $ NewUser name
-    liftSTM $ do
-        usermap <- readTVar (users db)
-        unless (Map.notMember name usermap)
-               (throwSTM $ UserAlreadyExists name)
-        timeline <- newTVar []
-        followers <- newTVar Set.empty
-        following <- newTVar Set.empty
-        let user = User{..}
-        modifyTVar (users db) (Map.insert name user)
-        return user
+createUser :: UserName -> SocialDB -> STM User
+createUser name db = do
+    usermap <- readTVar (users db)
+    unless (Map.notMember name usermap)
+           (throwSTM $ UserAlreadyExists name)
+    timeline <- newTVar []
+    followers <- newTVar Set.empty
+    following <- newTVar Set.empty
+    let user = User{..}
+    modifyTVar (users db) (Map.insert name user)
+    return user
 
-getUser :: UserName -> TX SocialDB User
-getUser name = do
-    db <- getData
-    usermap <- liftSTM $ readTVar (users db)
+getUser :: UserName -> SocialDB -> STM User
+getUser name db = do
+    usermap <- readTVar (users db)
     case Map.lookup name usermap of
         Just user -> return user
-        Nothing   -> throwTX (UserNotFound name)
+        Nothing   -> throwSTM (UserNotFound name)
 
-createPost :: User -> Text -> TX SocialDB Post
-createPost author body = do
-    db <- getData
-    postId <- liftSTM $ newUniquePostId db
-    time <- unsafeIOToTX getCurrentTime
-    record $ NewPost postId (name author) time body
-    liftSTM $ newPost postId author time body db
+createPost :: User -> Text -> SocialDB -> STM Post
+createPost author body db = do
+    postId <- newUniquePostId db
+    time <- unsafeIOToSTM getCurrentTime
+    newPost postId author time body db
 
 newUniquePostId :: SocialDB -> STM PostId
 newUniquePostId db = do
@@ -166,21 +133,12 @@ newPost postId author time body db = do
     modifyTVar (posts db) (Map.insert postId post)
     return post
 
-follow :: User -> User -> TX SocialDB ()
+follow :: User -> User -> STM ()
 follow user1 user2 = do
-    record $ Follow (name user1) (name user2)
-    liftSTM $ do
-        modifyTVar (following user1) (Set.insert user2)
-        modifyTVar (followers user2) (Set.insert user1)
+    modifyTVar (following user1) (Set.insert user2)
+    modifyTVar (followers user2) (Set.insert user1)
 
-unfollow :: User -> User -> TX SocialDB ()
+unfollow :: User -> User -> STM ()
 unfollow user1 user2 = do
-    record $ Unfollow (name user1) (name user2)
-    liftSTM $ do
-        modifyTVar (following user1) (Set.delete user2)
-        modifyTVar (followers user2) (Set.delete user1)
-
-------------------------------------------------------------------------------
-
-deriveSafeCopy 1 'base ''PostId
-deriveSafeCopyIndexedType 1 'base ''Operation [''SocialDB]
+    modifyTVar (following user1) (Set.delete user2)
+    modifyTVar (followers user2) (Set.delete user1)
