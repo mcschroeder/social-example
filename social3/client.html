@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<script src="../js/jquery-1.11.1.min.js"></script>
+<script src="../js/jquery.cookie-1.4.1.min.js"></script>
+<script src="../js/jquery-dateFormat.min.js"></script>
+<script type="text/javascript">
+/*--------------------------------------------------------------------------*/
+
+$(document).ready(function() {
+	showPage($.cookie("user"));
+});
+
+/*--------------------------------------------------------------------------*/
+
+const server = "http://localhost:3000"
+
+var visitedUser;
+function reloadPage() {
+	showPage(visitedUser);
+}
+function showPage(name) {
+	visitedUser = name;
+
+	var loggedInUser = $.cookie("user");
+	if (loggedInUser) {
+		$("#logged_in_user").html(linkify(loggedInUser));
+		$("#login").hide();
+		$("#logout").show();
+		$("#register").hide();
+	} else {
+		$("#logged_in_user").html("not logged in");
+		$("#login").show();
+		$("#logout").hide();
+		$("#register").show();
+	}
+
+	$.get(server + "/users", function(users) {
+		var idx = users.indexOf(loggedInUser);
+		if (idx != -1) { users.splice(idx, 1); }
+		$("#other_users").html(listify(users));
+	});	
+
+	$("#profile").hide();
+	stopPollingFeed();
+	$("#timeline").empty();	
+	if (!name) return;
+
+	$.get(server + "/users/" + name, function(user) {
+		$("#profile").show();
+		$("#followers").html(listify(user.followers));
+		$("#following").html(listify(user.following));
+
+		if (loggedInUser) {
+			if (user.name == loggedInUser) {
+				$("#title").html("Your feed");
+				$("#follow").hide();
+				$("#unfollow").hide();
+				$("#postform").show();
+			} else {
+				$("#title").html(user.name + "'s timeline");
+				if (user.followers.indexOf(loggedInUser) >= 0) {
+					$("#follow").hide();
+					$("#unfollow").show();
+				} else {
+					$("#follow").show();
+					$("#unfollow").hide();
+				}
+				$("#postform").show();
+			}
+		} else {
+			$("#title").html(user.name + "'s timeline");
+			$("#follow").hide();
+			$("#unfollow").hide();
+			$("#postform").hide();
+		}
+	});
+	
+	if (loggedInUser && name == loggedInUser) {
+		$.get(server + "/users/" + name + "/feed", function(posts) {
+			$("#timeline").html($.map(posts, renderPost));
+			pollFeed(name, posts[0] ? posts[0].time : "0000-00-00T00:00:00.0Z");
+		})
+	} else {
+		$.get(server + "/users/" + name + "/timeline", function(posts) {
+			$("#timeline").html($.map(posts, renderPost));
+		})
+	}
+}
+
+var pollRequest;
+function stopPollingFeed() {
+	if (pollRequest) pollRequest.abort();
+}
+function pollFeed(name, lastKnownTime) {
+	pollRequest = $.ajax(server + "/users/" + name + "/feed", {
+		data: {"lastKnownTime": lastKnownTime},
+		timeout: 30000,
+		success: function(posts) {
+			$("#timeline").prepend($.map(posts, renderPost));
+			pollFeed(name, posts[0].time);
+		},
+		error: function(x,t,m) {
+			if (t == "timeout") {
+				pollFeed(name, lastKnownTime);
+			}
+		}
+	})
+}
+
+/*--------------------------------------------------------------------------*/
+
+function logout() {
+	$.removeCookie("user");
+	reloadPage();
+}
+
+function login() {
+	var name = window.prompt("Enter the name of an existing user");
+	$.ajax(server + "/users/" + name, {
+		success: function(user) {
+			$.cookie("user", user.name);
+			showPage(user.name);
+		},
+		error: function(x,t,m) {
+			$("#profile").hide();
+			$("#timeline").html(x.responseText);
+		}
+	})
+}
+
+function register() {
+	var name = window.prompt("Register a new user");
+	if (name.trim() == "") return;
+	$.ajax(server + "/users", {
+		type: "put",
+		data: {"name": name},
+		success: function(user) {
+			$.cookie("user", user.name);
+			showPage(user.name);
+		},
+		error: function(x,t,m) {
+			$("#profile").hide();
+			$("#timeline").html(x.responseText);
+		}
+	})
+}
+
+function follow() {
+	var loggedInUser = $.cookie("user");
+	$.ajax(server + "/users/" + loggedInUser + "/following", {
+		type: "put", 
+		data: {"name": visitedUser},
+		success: reloadPage
+	})
+}
+
+function unfollow() {
+	var loggedInUser = $.cookie("user");
+	$.ajax(server + "/users/" + loggedInUser + "/following", {
+		type: "delete", 
+		data: {"name": visitedUser},
+		success: reloadPage
+	})
+}
+
+function post(body) {
+	if (!body || body.trim() == "") return;
+	var loggedInUser = $.cookie("user");
+	$.ajax(server + "/users/" + visitedUser + "/timeline", {
+		type: "post",
+		data: {"body": body, "author": loggedInUser},
+		success: reloadPage
+	})
+}
+
+function like(postId) {
+	var loggedInUser = $.cookie("user");
+	$.ajax(server + "/posts/" + postId + "/likes", {
+		type: "put", 
+		data: {"name": loggedInUser},
+		success: reloadPage
+	})
+}
+
+function unlike(postId) {
+	var loggedInUser = $.cookie("user");
+	$.ajax(server + "/posts/" + postId + "/likes", {
+		type: "delete", 
+		data: {"name": loggedInUser},
+		success: reloadPage
+	})
+}
+
+/*--------------------------------------------------------------------------*/
+
+function linkify(name) {
+	return "<a href=\"javascript:showPage('" + name + "');\">" + name + "</a>"
+}
+
+function listify(names) {
+	if (names.length == 0) {
+		return "none";
+	} else {
+		var first = linkify(names[0]);
+		var middle = "";
+		$.each(names.slice(1, names.length-1), function() {
+			middle += ", " + linkify(this);
+		});
+		var last = "";
+		if (names.length > 1) {
+			last = " and " + linkify(names[names.length-1]);
+		}
+		return first+middle+last;
+	}
+}
+
+function renderPost(post) {
+	return "<div>" + renderAuthor(post) + ", "
+		 + jQuery.format.prettyDate(post.time) + ": " 
+		 + "<b>" + post.body + "</b><br>"
+		 + renderLikes(post) + renderLikeButton(post)
+		 + "</div><br>"
+}
+
+function renderAuthor(post) {
+	if (post.target != post.author) {
+		return linkify(post.author) + " to " + linkify(post.target);
+	} else {
+		return linkify(post.author);
+	}
+}
+
+function renderLikes(post) {
+	if (post.likes && post.likes.length > 0) {
+		return "Liked by " + listify(post.likes) + ". ";
+	} else {
+		return "";
+	}
+}
+
+function renderLikeButton(post) {
+	var loggedInUser = $.cookie("user");
+	if (loggedInUser && post.likes && post.likes.indexOf(loggedInUser) >= 0) {
+		return "<input type=\"button\" value=\"Unlike\" onClick=\"javascript:unlike('"+post.postId+"');\">";
+	} else if (loggedInUser) {
+		return "<input type=\"button\" value=\"Like\" onClick=\"javascript:like('"+post.postId+"');\">";
+	} else {
+		return "";
+	}
+}
+
+/*--------------------------------------------------------------------------*/
+</script>
+</head>
+<body>
+You are <span id="logged_in_user">not logged in</span>.
+<input type="button" id="login" value="Login" onClick="javascript:login();">
+<input type="button" id="logout" value="Logout" onClick="javascript:logout();">
+<input type="button" id="register" value="Register" onClick="javascript:register();">
+<br>
+Other users: <span id="other_users">none</span>.
+<br>
+<br>
+<div id="profile">
+<h1 id="title" style="display:inline"></h1>
+<input type="button" id="follow" value="Follow" onClick="javascript:follow();">
+<input type="button" id="unfollow" value="Unfollow" onClick="javascript:unfollow();">
+<br>
+Followers: <span id="followers">none</span>.
+<br>
+Following: <span id="following">none</span>.
+<br>
+<br>
+<form id="postform" action="#" onSubmit="javascript:post(this.body.value);this.reset();return false;">
+<input type="text" name="body">
+<input type="submit" value="Post">
+</form>
+</div>
+<br>
+<div id="timeline"></div>
+</body>
+</html>
