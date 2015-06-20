@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -19,7 +20,13 @@ import Control.Monad.Trans.State.Strict
 import qualified Data.ByteString as B
 import Data.SafeCopy
 import Data.Serialize (Result(..), runGetPartial, runPut)
-import GHC.Conc.Sync (unsafeIOToSTM, {- atomicallyWithIO -})
+
+#ifdef SIMULATE_FINALIZERS
+import GHC.Conc.Sync (unsafeIOToSTM)
+#else
+import GHC.Conc.Sync (unsafeIOToSTM, atomicallyWithIO)
+#endif
+
 import System.IO
 
 ------------------------------------------------------------------------------
@@ -90,8 +97,6 @@ closeDatabase (DatabaseHandle _ h) = withMVar h hClose
 
 ------------------------------------------------------------------------------
 
--- TODO: remove this
-{-# WARNING durably "atomicallyWithIO not supported; using unsafe simulation" #-}
 durably :: DatabaseHandle d -> TX d a -> IO a
 durably h (TX m) = atomicallyWithIO action finalizer
   where
@@ -104,6 +109,8 @@ serialize ops (DatabaseHandle _ h) =
 
 ------------------------------------------------------------------------------
 
--- TODO: remove this
+#ifdef SIMULATE_FINALIZERS
+{-# WARNING durably "atomicallyWithIO not supported; using unsafe simulation" #-}
 atomicallyWithIO :: STM a -> (a -> IO b) -> IO b
 atomicallyWithIO stm io = atomically stm >>= io
+#endif

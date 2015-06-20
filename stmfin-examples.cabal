@@ -20,20 +20,20 @@ executable social0
   hs-source-dirs: social0
   main-is: Server.hs
   other-modules: SocialDB
-  build-depends: base ==4.7.*
+  build-depends: base >=4.7
                , aeson >=0.8
-               , cereal ==0.4.*
-               , containers ==0.5.*
-               , bytestring ==0.10.*
-               , http-types ==0.8.*
-               , old-locale ==1.0.*
-               , random ==1.1.*
-               , safecopy ==0.8.*
-               , scotty ==0.9.*
+               , cereal >=0.4
+               , containers >=0.5
+               , bytestring >=0.10
+               , http-types >=0.8
+               , old-locale >=1.0
+               , random >=1.1
+               , safecopy >=0.8
+               , scotty >=0.9
                , stm >=2.4.3 && <2.5
-               , text ==1.2.*
-               , time ==1.4.*
-               , transformers ==0.4.*
+               , text >=1.2
+               , time >=1.4
+               , transformers >=0.4
   ghc-options: -threaded
   default-language: Haskell2010
 
@@ -41,20 +41,20 @@ executable social1
   hs-source-dirs: social1, tx
   main-is: Server.hs
   other-modules: SocialDB, TX
-  build-depends: base ==4.7.*
+  build-depends: base >=4.7
                , aeson >=0.8
-               , cereal ==0.4.*
-               , containers ==0.5.*
-               , bytestring ==0.10.*
-               , http-types ==0.8.*
-               , old-locale ==1.0.*
-               , random ==1.1.*
-               , safecopy ==0.8.*
-               , scotty ==0.9.*
+               , cereal >=0.4
+               , containers >=0.5
+               , bytestring >=0.10
+               , http-types >=0.8
+               , old-locale >=1.0
+               , random >=1.1
+               , safecopy >=0.8
+               , scotty >=0.9
                , stm >=2.4.3 && <2.5
-               , text ==1.2.*
-               , time ==1.4.*
-               , transformers ==0.4.*
+               , text >=1.2
+               , time >=1.4
+               , transformers >=0.4
   ghc-options: -threaded
   default-language: Haskell2010
 
@@ -62,20 +62,20 @@ executable social2
   hs-source-dirs: social2, tx
   main-is: Server.hs
   other-modules: SocialDB, TX
-  build-depends: base ==4.7.*
+  build-depends: base >=4.7
                , aeson >=0.8
-               , cereal ==0.4.*
-               , containers ==0.5.*
-               , bytestring ==0.10.*
-               , http-types ==0.8.*
-               , old-locale ==1.0.*
-               , random ==1.1.*
-               , safecopy ==0.8.*
-               , scotty ==0.9.*
+               , cereal >=0.4
+               , containers >=0.5
+               , bytestring >=0.10
+               , http-types >=0.8
+               , old-locale >=1.0
+               , random >=1.1
+               , safecopy >=0.8
+               , scotty >=0.9
                , stm >=2.4.3 && <2.5
-               , text ==1.2.*
-               , time ==1.4.*
-               , transformers ==0.4.*
+               , text >=1.2
+               , time >=1.4
+               , transformers >=0.4
   ghc-options: -threaded
   default-language: Haskell2010
 
@@ -83,21 +83,21 @@ executable social3
   hs-source-dirs: social3, tx
   main-is: Server.hs
   other-modules: SocialDB, TX
-  build-depends: base ==4.7.*
+  build-depends: base >=4.7
                , aeson >=0.8
-               , cereal ==0.4.*
-               , containers ==0.5.*
-               , bytestring ==0.10.*
+               , cereal >=0.4
+               , containers >=0.5
+               , bytestring >=0.10
                , hashable >= 1.2
-               , http-types ==0.8.*
-               , old-locale ==1.0.*
-               , random ==1.1.*
-               , safecopy ==0.8.*
-               , scotty ==0.9.*
+               , http-types >=0.8
+               , old-locale >=1.0
+               , random >=1.1
+               , safecopy >=0.8
+               , scotty >=0.9
                , stm >=2.4.3 && <2.5
-               , text ==1.2.*
-               , time ==1.4.*
-               , transformers ==0.4.*
+               , text >=1.2
+               , time >=1.4
+               , transformers >=0.4
                , ttrie >=0.1.2
   ghc-options: -threaded
   default-language: Haskell2010
