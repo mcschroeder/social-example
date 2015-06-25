@@ -4,6 +4,7 @@ module Server where
 
 import Control.Applicative
 import Control.Concurrent.STM
+import qualified Control.Concurrent.STM.Map as Map
 import Control.Monad
 import Control.Monad.IO.Class
 import Data.Aeson (ToJSON, toJSON, object, (.=))
@@ -13,8 +14,8 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import Data.Time
 import qualified Data.Text.Lazy as L
+import GHC.Conc.Sync (unsafeIOToSTM)
 import Network.HTTP.Types.Status
-import System.Locale
 import System.Timeout
 import Web.Scotty hiding (body)
 
@@ -91,7 +92,9 @@ main = do
 ------------------------------------------------------------------------------
 
 getAllUserNames :: SocialDB -> STM [Text]
-getAllUserNames db = map fst . Map.toList <$> readTVar (users db)
+getAllUserNames db = do
+    usermap <- unsafeIOToSTM $ Map.unsafeToList (users db)
+    return $ map fst usermap
 
 userToJson :: User -> STM Aeson.Value
 userToJson user = do
@@ -117,5 +120,5 @@ instance Parsable PostId where
 
 instance Parsable UTCTime where
     parseParam = maybe (Left "no parse") Right
-               . parseTime defaultTimeLocale "%FT%T%Q%Z"
+               . parseTimeM True defaultTimeLocale "%FT%T%Q%Z"
                . L.unpack

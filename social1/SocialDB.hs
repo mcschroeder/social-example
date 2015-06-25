@@ -16,11 +16,12 @@ module SocialDB
 
 import Control.Applicative
 import Control.Concurrent.STM
+import Control.Concurrent.STM.Map (Map)
+import qualified Control.Concurrent.STM.Map as Map
 import Control.Exception
 import Control.Monad
+import Data.Hashable
 import Data.List
-import Data.Map (Map)
-import qualified Data.Map as Map
 import Data.Ord
 import Data.SafeCopy
 import Data.Set (Set)
@@ -37,8 +38,8 @@ import TX
 ------------------------------------------------------------------------------
 
 data SocialDB = SocialDB
-    { users :: TVar (Map UserName User)
-    , posts :: TVar (Map PostId Post)
+    { users :: Map UserName User
+    , posts :: Map PostId Post
     }
 
 type UserName = Text
@@ -51,7 +52,7 @@ data User = User
     }
 
 newtype PostId = PostId Word64
-    deriving (Eq, Ord, Random, Show)
+    deriving (Eq, Ord, Random, Show, Hashable)
 
 data Post = Post
     { postId :: PostId
@@ -68,8 +69,8 @@ instance Ord User where
 
 emptySocialDB :: IO SocialDB
 emptySocialDB = do
-    users <- newTVarIO Map.empty
-    posts <- newTVarIO Map.empty
+    users <- atomically $ Map.empty
+    posts <- atomically $ Map.empty
     return SocialDB{..}
 
 ------------------------------------------------------------------------------
@@ -126,23 +127,23 @@ createUser name = do
     db <- getData
     record $ NewUser name
     liftSTM $ do
-        usermap <- readTVar (users db)
-        unless (Map.notMember name usermap)
-               (throwSTM $ UserAlreadyExists name)
+        alreadyExists <- Map.member name (users db)
+        when alreadyExists (throwSTM $ UserAlreadyExists name)
         timeline <- newTVar []
         followers <- newTVar Set.empty
         following <- newTVar Set.empty
         let user = User{..}
-        modifyTVar (users db) (Map.insert name user)
+        Map.insert name user (users db)
         return user
 
 getUser :: UserName -> TX SocialDB User
 getUser name = do
     db <- getData
-    usermap <- liftSTM $ readTVar (users db)
-    case Map.lookup name usermap of
-        Just user -> return user
-        Nothing   -> throwTX (UserNotFound name)
+    liftSTM $ do
+        user <- Map.lookup name (users db)
+        case user of
+            Just user -> return user
+            Nothing   -> throwSTM (UserNotFound name)
 
 createPost :: User -> Text -> TX SocialDB Post
 createPost author body = do
@@ -155,15 +156,15 @@ createPost author body = do
 newUniquePostId :: SocialDB -> STM PostId
 newUniquePostId db = do
     postId <- unsafeIOToSTM randomIO
-    posts <- readTVar (posts db)
-    check (Map.notMember postId posts)
+    alreadyExists <- Map.member postId (posts db)
+    check (not alreadyExists)
     return postId
 
 newPost :: PostId -> User -> UTCTime -> Text -> SocialDB -> STM Post
 newPost postId author time body db = do
     let post = Post{..}
     modifyTVar (timeline author) (post:)
-    modifyTVar (posts db) (Map.insert postId post)
+    Map.insert postId post (posts db)
     return post
 
 follow :: User -> User -> TX SocialDB ()
